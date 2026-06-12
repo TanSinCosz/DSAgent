@@ -13,7 +13,7 @@ import { lemmatizeForBm25CN } from "./utils/lemmatizeCN.js";
 import { lemmatizeForBm25 } from "./utils/lemmatizeEng.js";
 import { ADDITIVE_EXTRACTION_PROMPT, AGENT_CONTEXT_SUFFIX } from "./prompt.js";
 import { generateAdditiveExtractionPrompt } from "./utils/prompt.js";
-import { extractEntities, extractEntitiesBatch } from "./utils/entity_extraction.js";
+import { extractEntitiesBatch } from "./utils/entity_extraction.js";
 import { OpenAIStructuredLLM } from "./LLM/LLM.js";
 import { SearchMemoryOptions } from "./type.js";
 import { scoreAndRank, getBm25Params, ENTITY_BOOST_WEIGHT } from "./utils/scoring.js";
@@ -564,11 +564,6 @@ export class MemoryTool {
             };
             if (mem.attributed_to) {
                 memPayload.attributedTo = mem.attributed_to;
-            }
-            if (mem.linked_memory_ids?.length) {
-                memPayload.linkedMemoryIds = Array.from(
-                    new Set(mem.linked_memory_ids),
-                ).sort();
             }
             if (filters.user_id) memPayload.user_id = filters.user_id;
             if (filters.agent_id) memPayload.agent_id = filters.agent_id;

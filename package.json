@@ -19,7 +19,7 @@
   "dependencies": {
     "@node-rs/jieba": "^2.0.1",
     "better-sqlite3": "^12.10.0",
-    "nodejieba": "^3.5.8",
+    "lru-cache": "^11.5.1",
     "openai": "^6.42.0",
     "tsx": "^4.22.4",
     "uuid": "^14.0.0",

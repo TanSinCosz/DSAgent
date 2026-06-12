@@ -1,79 +1,266 @@
 import type { z } from "zod";
+import { LRUCache } from 'lru-cache'
+import { normalize } from 'path'
+import type { Message } from "../types/type.js";
+import type { Tokenizer } from "./utils/Tokenizer.js";
+
 
 export type MaybePromise<T> = T | Promise<T>;
 
-export type ToolExecutionValue =
-  | string
-  | number
-  | boolean
-  | null
-  | ToolExecutionObject
-  | ToolExecutionValue[];
+export type ToolInputSchema = z.ZodType | (() => z.ZodType);
+export type ToolOutputSchema = z.ZodType | (() => z.ZodType);
+export type ToolExecutionValue = unknown;
 
-export interface ToolExecutionObject {
-  [key: string]: ToolExecutionValue;
+export type JSONSchemaPrimitive = string | number | boolean | null;
+
+export type JSONSchemaValue =
+    | JSONSchemaPrimitive
+    | JSONSchemaObject
+    | JSONSchemaValue[];
+
+export interface JSONSchemaObject {
+    [key: string]: JSONSchemaValue;
 }
 
-export type ToolInputSchema = z.ZodType | (() => z.ZodType);
 
 export interface Tool<
-  TInput = Record<string, unknown>,
-  TOutput = ToolExecutionValue,
+    TInput = Record<string, unknown>,
+    TOutput = ToolExecutionValue,
+    TInputSchema extends ToolInputSchema = ToolInputSchema,
+    TOutputSchema extends ToolOutputSchema = ToolOutputSchema,
 > {
-  name: string;
-  input_schema: ToolInputSchema;
-  max_result_size_chars?: number;
-  search_hint?: string;
-  should_defer?: boolean;
-  always_load?: boolean;
-  strict?: boolean;
-  description(): string;
-  prompt?(): string;
-  is_enabled?(): MaybePromise<boolean>;
-  user_facing_name?(): string;
-  is_concurrency_safe?(): boolean;
-  call(
-    input: TInput,
-  ): MaybePromise<TOutput>;
+    name: string;
+    inputSchema: TInputSchema;
+    outputSchema: TOutputSchema
+    maxResultSizeChars?: number;
+    searchHint?: string;
+    shouldDefer?: boolean;
+    alwaysLoad?: boolean;
+    strict?: boolean;
+
+    description(): MaybePromise<string>;
+    prompt(): MaybePromise<string>;
+
+    isEnabled?(): MaybePromise<boolean>;
+    userFacingName?(): string;
+    isConcurrencySafe?(): boolean;
+
+    call(
+        input: TInput,
+        context: ToolUseContext,
+    ): MaybePromise<TOutput>;
 }
 
-export type JSONSchema =
-  | JSONSchemaString
-  | JSONSchemaNumber
-  | JSONSchemaBoolean
-  | JSONSchemaNull
-  | JSONSchemaObject
-  | JSONSchemaArray;
 
-export interface JSONSchemaBase {
-  description?: string;
+interface AbortController {
+    /**
+     * The **`signal`** read-only property of the AbortController interface returns an AbortSignal object instance, which can be used to communicate with/abort an asynchronous operation as desired.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/AbortController/signal)
+     */
+    readonly signal: AbortSignal;
+    /**
+     * The **`abort()`** method of the AbortController interface aborts an asynchronous operation before it has completed.
+     *
+     * [MDN Reference](https://developer.mozilla.org/docs/Web/API/AbortController/abort)
+     */
+    abort(reason?: any): void;
 }
 
-export interface JSONSchemaString extends JSONSchemaBase {
-  type: "string";
-  enum?: string[];
+
+
+
+export type FileState = {
+    content: string
+    timestamp: number
+    offset: number | undefined
+    limit: number | undefined
+    // True when this entry was populated by auto-injection (e.g. CLAUDE.md) and
+    // the injected content did not match disk (stripped HTML comments, stripped
+    // frontmatter, truncated MEMORY.md). The model has only seen a partial view;
+    // Edit/Write must require an explicit Read first. `content` here holds the
+    // RAW disk bytes (for getChangedFiles diffing), not what the model saw.
+    isPartialView?: boolean
 }
 
-export interface JSONSchemaNumber extends JSONSchemaBase {
-  type: "number" | "integer";
+
+export class FileStateCache {
+    private cache: LRUCache<string, FileState>
+
+    constructor(maxEntries: number, maxSizeBytes: number) {
+        this.cache = new LRUCache<string, FileState>({
+            max: maxEntries,
+            maxSize: maxSizeBytes,
+            sizeCalculation: value => Math.max(1, Buffer.byteLength(value.content)),
+        })
+    }
+
+    get(key: string): FileState | undefined {
+        return this.cache.get(normalize(key))
+    }
+
+    set(key: string, value: FileState): this {
+        this.cache.set(normalize(key), value)
+        return this
+    }
+
+    has(key: string): boolean {
+        return this.cache.has(normalize(key))
+    }
+
+    delete(key: string): boolean {
+        return this.cache.delete(normalize(key))
+    }
+
+    clear(): void {
+        this.cache.clear()
+    }
+
+    get size(): number {
+        return this.cache.size
+    }
+
+    get max(): number {
+        return this.cache.max
+    }
+
+    get maxSize(): number {
+        return this.cache.maxSize
+    }
+
+    get calculatedSize(): number {
+        return this.cache.calculatedSize
+    }
+
+    keys(): Generator<string> {
+        return this.cache.keys()
+    }
+
+    entries(): Generator<[string, FileState]> {
+        return this.cache.entries()
+    }
+
+    dump(): ReturnType<LRUCache<string, FileState>['dump']> {
+        return this.cache.dump()
+    }
+
+    load(entries: ReturnType<LRUCache<string, FileState>['dump']>): void {
+        this.cache.load(entries)
+    }
 }
 
-export interface JSONSchemaBoolean extends JSONSchemaBase {
-  type: "boolean";
+export type Tools = readonly Tool[]
+
+export type ThinkingConfig =
+    | { type: 'enabled' }
+    | { type: 'disabled' }
+
+
+export type ToolUseContext = {
+    options: {
+        tools: Tools
+        isNonInteractiveSession: boolean
+        mainLoopModel: string
+        agentDefinitions: AgentDefinitionsResult
+        thinkingConfig: ThinkingConfig
+    }
+    dynamicSkillDirTriggers?: Set<string>
+    abortController: AbortController
+    skillRuntime: SkillRuntimeState
+    getAppState(): AppState
+    setAppState(f: (prev: AppState) => AppState): void
+    readFileState: FileStateCache
+    tokenizer?: Tokenizer
+    messages: Message[]
 }
 
-export interface JSONSchemaNull extends JSONSchemaBase {
-  type: "null";
+export type SkillCommand = {
+    name: string
+    description: string
+    content: string
+    paths?: string[]
 }
 
-export interface JSONSchemaArray extends JSONSchemaBase {
-  type: "array";
-  items: JSONSchema;
+
+export type SkillRuntimeState = {
+    checkedSkillDirs: Set<string>
+    dynamicSkills: Map<string, SkillCommand>
+    conditionalSkills: Map<string, SkillCommand>
+    activatedConditionalSkillNames: Set<string>
 }
 
-export interface JSONSchemaObject extends JSONSchemaBase {
-  type: "object";
-  properties: Record<string, JSONSchema>;
-  required?: string[];
-  additionalProperties?: boolean | JSONSchema;
+
+
+// Agent section
+export type AgentDefinitionsResult = {
+    activeAgents: AgentDefinition[]
+    allAgents: AgentDefinition[]
+}
+
+export type AgentSource =
+    | 'built-in'
+    | 'userSettings'
+    | 'projectSettings'
+    | 'localSettings'
+    | 'policySettings'
+    | 'flagSettings'
+    | 'plugin'
+
+export type AgentDefinition = {
+    agentType: string
+    whenToUse: string
+    getSystemPrompt: () => string
+
+    source: AgentSource
+
+    tools?: string[]
+    disallowedTools?: string[]
+    model?: string
+    permissionMode?: PermissionMode
+    maxTurns?: number
+}
+
+// AppState section 
+export type AppState = {
+    toolPermissionContext: ToolPermissionContext
+}
+
+export function getEmptyToolPermissionContext(): ToolPermissionContext {
+    return {
+        mode: 'default',
+        additionalWorkingDirectories: new Map(),
+        alwaysAllowRules: {},
+        alwaysDenyRules: {},
+        alwaysAskRules: {},
+    }
+}
+
+
+export type PermissionMode =
+    | 'default'
+    | 'acceptEdits'
+    | 'bypassPermissions'
+    | 'dontAsk'
+    | 'plan'
+
+export type PermissionRuleSource =
+    | 'userSettings'
+    | 'projectSettings'
+    | 'localSettings'
+    | 'flagSettings'
+    | 'policySettings'
+    | 'cliArg'
+    | 'command'
+    | 'session'
+
+export type ToolPermissionRulesBySource = {
+    [T in PermissionRuleSource]?: string[]
+}
+
+export type ToolPermissionContext = {
+    mode: PermissionMode
+    additionalWorkingDirectories: Map<string, { path: string; source: PermissionRuleSource }>
+    alwaysAllowRules: ToolPermissionRulesBySource
+    alwaysDenyRules: ToolPermissionRulesBySource
+    alwaysAskRules: ToolPermissionRulesBySource
 }

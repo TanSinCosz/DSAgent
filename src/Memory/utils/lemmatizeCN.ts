@@ -1,15 +1,19 @@
 import fs from "fs";
+import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
-import nodejieba from "nodejieba";
+import { Jieba } from "@node-rs/jieba";
 
 const CURRENT_FILE_PATH = fileURLToPath(import.meta.url);
+const require = createRequire(import.meta.url);
+const JIEBA_DICT_PATH = require.resolve("@node-rs/jieba/dict.txt");
 const STOP_WORDS_PATH = path.resolve(
   path.dirname(CURRENT_FILE_PATH),
   "cn_hit.txt",
 );
 
 let cachedStopWords: Set<string> | null = null;
+const jieba = Jieba.withDict(fs.readFileSync(JIEBA_DICT_PATH));
 
 function loadStopWords(): Set<string> {
   if (cachedStopWords) {
@@ -60,7 +64,7 @@ function isMeaningfulToken(token: string): boolean {
  * Chinese text normalization for BM25 keyword matching.
  *
  * Processing steps:
- * 1. Segment Chinese text with `nodejieba`.
+ * 1. Segment Chinese text with `@node-rs/jieba`.
  * 2. Normalize tokens with lowercase + trim.
  * 3. Remove stop words.
  * 4. Remove punctuation / symbol-only tokens.
@@ -73,7 +77,7 @@ export function lemmatizeForBm25CN(text: string): string {
   }
 
   const stopWords = loadStopWords();
-  const tokens = nodejieba.cut(normalizedText, true);
+  const tokens = jieba.cut(normalizedText, true);
   const filtered: string[] = [];
 
   for (const token of tokens) {

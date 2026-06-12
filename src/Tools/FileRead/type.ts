@@ -22,17 +22,34 @@ export const inputSchema = lazySchema(() =>
     }),
 )
 export const outputSchema = lazySchema(() =>
-    z.object({
-        type: z.literal('text'),
-        file: z.object({
-            filePath: z.string().describe('The path to the file that was read'),
-            content: z.string().describe('The content of the file'),
-            numLines: z
-                .number()
-                .describe('Number of lines in the returned content'),
-            startLine: z.number().describe('The starting line number'),
-            totalLines: z.number().describe('Total number of lines in the file'),
+    z.discriminatedUnion('type', [
+        z.object({
+            type: z.literal('text'),
+            file: z.object({
+                filePath: z.string().describe('The path to the file that was read'),
+                content: z.string().describe('The content of the file'),
+                numLines: z
+                    .number()
+                    .describe('Number of lines in the returned content'),
+                startLine: z.number().describe('The starting line number'),
+                totalLines: z.number().describe('Total number of lines in the file'),
+            }),
         }),
-    }),
+        z.object({
+            type: z.literal('file_unchanged'),
+            file: z.object({
+                filePath: z.string().describe('The path to the unchanged file'),
+            }),
+        }),
+    ]),
 )
-
+export type ReadFileRangeResult = {
+  content: string
+  lineCount: number
+  totalLines: number
+  totalBytes: number
+  readBytes: number
+  mtimeMs: number
+  /** true when output was clipped to maxBytes under truncate mode */
+  truncatedByBytes?: boolean
+}

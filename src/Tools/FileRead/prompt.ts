@@ -15,7 +15,7 @@ export const MAX_LINES_TO_READ = 2000
 export const DESCRIPTION = 'Read a file from the local filesystem.'
 
 export const LINE_FORMAT_INSTRUCTION =
-  '- Results are returned using cat -n format, with line numbers starting at 1'
+  '- Results are returned using compact line prefixes: line number + tab + file content, with line numbers starting at 1'
 
 export const OFFSET_INSTRUCTION_DEFAULT =
   "- You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters"

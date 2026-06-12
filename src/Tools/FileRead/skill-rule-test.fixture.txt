@@ -1,0 +1,3 @@
+FileRead path rule fixture.
+
+Reading this file should activate the file-read-path-rule skill.
