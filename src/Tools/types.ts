@@ -23,6 +23,15 @@ export interface JSONSchemaObject {
 }
 
 
+export interface BackgroundTask {
+    id: string
+    command: string
+    status: 'running' | 'completed' | 'failed' | 'killed'
+    stdout: string
+    stderr: string
+    exitCode?: number
+}
+
 export interface Tool<
     TInput = Record<string, unknown>,
     TOutput = ToolExecutionValue,
@@ -164,7 +173,7 @@ export type ToolUseContext = {
         agentDefinitions: AgentDefinitionsResult
         thinkingConfig: ThinkingConfig
     }
-    dynamicSkillDirTriggers?: Set<string>
+    dynamicSkillDirTriggers?: Set<string> // 记录这轮工具调用因为访问某个路径而触发了哪些 skill 目录。
     abortController: AbortController
     skillRuntime: SkillRuntimeState
     getAppState(): AppState
@@ -172,6 +181,48 @@ export type ToolUseContext = {
     readFileState: FileStateCache
     tokenizer?: Tokenizer
     messages: Message[]
+}
+
+export type CreateToolUseContextOptions = {
+    tools?: Tools
+    messages?: Message[]
+    appState?: AppState
+    abortController?: AbortController
+    tokenizer?: Tokenizer
+    isNonInteractiveSession?: boolean
+    mainLoopModel?: string
+    agentDefinitions?: AgentDefinitionsResult
+    thinkingConfig?: ThinkingConfig
+}
+
+export function createToolUseContext(
+    options: CreateToolUseContextOptions = {},
+): ToolUseContext {
+    let appState =
+        options.appState ?? { toolPermissionContext: getEmptyToolPermissionContext() }
+
+    return {
+        options: {
+            tools: options.tools ?? [],
+            isNonInteractiveSession: options.isNonInteractiveSession ?? false,
+            mainLoopModel: options.mainLoopModel ?? '',
+            agentDefinitions: options.agentDefinitions ?? {
+                activeAgents: [],
+                allAgents: [],
+            },
+            thinkingConfig: options.thinkingConfig ?? { type: 'disabled' },
+        },
+        dynamicSkillDirTriggers: new Set(),
+        abortController: options.abortController ?? new AbortController(),
+        skillRuntime: createSkillRuntimeState(),
+        getAppState: () => appState,
+        setAppState: update => {
+            appState = update(appState)
+        },
+        readFileState: new FileStateCache(100, 1024 * 1024),
+        tokenizer: options.tokenizer,
+        messages: options.messages ?? [],
+    }
 }
 
 export type SkillCommand = {
@@ -187,6 +238,15 @@ export type SkillRuntimeState = {
     dynamicSkills: Map<string, SkillCommand>
     conditionalSkills: Map<string, SkillCommand>
     activatedConditionalSkillNames: Set<string>
+}
+
+export function createSkillRuntimeState(): SkillRuntimeState {
+    return {
+        checkedSkillDirs: new Set(),
+        dynamicSkills: new Map(),
+        conditionalSkills: new Map(),
+        activatedConditionalSkillNames: new Set(),
+    }
 }
 
 

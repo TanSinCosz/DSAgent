@@ -1,13 +1,12 @@
-import { FILE_EDIT_TOOL_NAME } from "./prompt.js";
 import { Tool, ToolUseContext } from "../types.js";
 import { outputSchema, inputSchema } from "./type.js";
 import { z } from "zod";
-import { getEditToolDescription } from "./prompt.js";
 import { expandPath } from "../utils/path.js";
 
 import { discoverSkillsForReadPath } from "../utils/discoverSkillsForReadPath.js";
 import { getFileModificationTimeAsync } from "../utils/fileState.js";
 import { createStructuredPatch } from "../utils/patch.js";
+import { BASH_TOOL_NAME } from "./prompt.js";
 
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname } from 'path'
@@ -33,9 +32,9 @@ type PreparedEdit =
         message: string;
     };
 
-export class FileEdit implements Tool<typeInput, typeOutput, typeof inputSchema, typeof outputSchema> {
+export class Bash implements Tool<typeInput, typeOutput, typeof inputSchema, typeof outputSchema> {
 
-    name = FILE_EDIT_TOOL_NAME;
+    name = BASH_TOOL_NAME;
     searchHint = 'modify file contents in place';
     maxResultSizeChars = 100_000;
     strict = true;
@@ -43,7 +42,7 @@ export class FileEdit implements Tool<typeInput, typeOutput, typeof inputSchema,
         return 'A tool for editing files'
     };
     async prompt() {
-        return getEditToolDescription()
+        return getSimplePrompt();
     };
     inputSchema = inputSchema;
     outputSchema = outputSchema;

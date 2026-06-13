@@ -17,7 +17,7 @@ type typeOutput = z.infer<ReturnType<typeof outputSchema>>;
 
 type ValidationResult =
     | { result: true }
-    | { result: false; message: string };
+    | { result: false; message: string; errorCode?: number };
 
 type PreparedEdit =
     | {
@@ -51,163 +51,126 @@ export class FileWrite implements Tool<typeInput, typeOutput, typeof inputSchema
     }
 
     async validateInput(
-        input: typeInput,
+        { file_path }: typeInput,
         context: ToolUseContext,
     ): Promise<ValidationResult> {
-        const prepared = await prepareEdit(input, context)
-        if ('message' in prepared) {
-            return { result: false, message: prepared.message }
+        const absoluteFilePath = expandPath(file_path)
+
+        const exists = await pathExists(absoluteFilePath)
+        if (!exists) {
+            return { result: true }
+        }
+
+        const lastRead = context.readFileState.get(absoluteFilePath)
+        if (!lastRead || lastRead.isPartialView) {
+            return {
+                result: false,
+                message: 'File has not been read yet. Read it first before writing to it.',
+                errorCode: 2,
+            }
+        }
+
+        const currentTimestamp = await getFileModificationTimeAsync(absoluteFilePath)
+
+        if (currentTimestamp > lastRead.timestamp) {
+            return {
+                result: false,
+                message:
+                    'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
+                errorCode: 3,
+            }
         }
 
         return { result: true }
     }
 
-    async call(input: typeInput, context: ToolUseContext): Promise<typeOutput> {
-        const { file_path, new_string } = input
-        const prepared = await prepareEdit(input, context)
+    async call(
+        { file_path, content }: typeInput,
+        context: ToolUseContext,
+    ): Promise<typeOutput> {
+        const absoluteFilePath = expandPath(file_path)
 
-        if ('message' in prepared) {
-            throw new Error(prepared.message)
+        await discoverSkillsForReadPath(absoluteFilePath, context)
+
+        const originalFile = await readTextFileOrNull(absoluteFilePath)
+
+        if (originalFile !== null) {
+            const lastRead = context.readFileState.get(absoluteFilePath)
+
+            if (!lastRead || lastRead.isPartialView) {
+                throw new Error(
+                    'File has not been read yet. Read it first before writing to it.',
+                )
+            }
+
+            const currentTimestamp = await getFileModificationTimeAsync(absoluteFilePath)
+
+            if (currentTimestamp > lastRead.timestamp) {
+                throw new Error(
+                    'File has been modified since read. Read it again before writing.',
+                )
+            }
         }
 
-        await discoverSkillsForReadPath(prepared.absoluteFilePath, context)
+        await writeTextFile(absoluteFilePath, content)
 
-        const updatedFile = prepared.replaceAll
-            ? prepared.originalFileContents.replaceAll(prepared.actualOldString, new_string)
-            : prepared.originalFileContents.replace(prepared.actualOldString, new_string)
+        const timestamp = await getFileModificationTimeAsync(absoluteFilePath)
 
-        await writeFile(prepared.absoluteFilePath, updatedFile, 'utf8')
-
-        const timestamp = await getFileModificationTimeAsync(prepared.absoluteFilePath)
-        context.readFileState.set(prepared.absoluteFilePath, {
-            content: updatedFile,
+        context.readFileState.set(absoluteFilePath, {
+            content,
             timestamp,
             offset: undefined,
             limit: undefined,
         })
 
         return {
+            type: originalFile === null ? 'create' : 'update',
             filePath: file_path,
-            oldString: prepared.actualOldString,
-            newString: new_string,
-            originalFile: prepared.originalFileContents,
-            structuredPatch: [
-                {
-                    oldStart: 1,
-                    oldLines: prepared.originalFileContents.split('\n').length,
-                    newStart: 1,
-                    newLines: updatedFile.split('\n').length,
-                    lines: [],
-                },
-            ],
-            userModified: false,
-            replaceAll: prepared.replaceAll,
+            content,
+            structuredPatch:
+                originalFile === null
+                    ? []
+                    : [
+                        {
+                            oldStart: 1,
+                            oldLines: originalFile.split('\n').length,
+                            newStart: 1,
+                            newLines: content.split('\n').length,
+                            lines: [],
+                        },
+                    ],
+            originalFile,
         }
     }
 }
 
-async function prepareEdit(
-    input: typeInput,
-    context: ToolUseContext,
-): Promise<PreparedEdit> {
-    const { file_path, old_string, new_string, replace_all = false } = input
-    const absoluteFilePath = expandPath(file_path)
 
-    if (old_string === new_string) {
-        return {
-            ok: false,
-            message: 'old_string and new_string are the same.',
-        }
-    }
-
-    const lastRead = context.readFileState.get(absoluteFilePath)
-    if (!lastRead) {
-        return {
-            ok: false,
-            message: 'File has not been read yet. Read it first before editing.',
-        }
-    }
-
-    const lastWriteTime = await getFileModificationTimeAsync(absoluteFilePath)
-    if (lastWriteTime > lastRead.timestamp) {
-        return {
-            ok: false,
-            message: 'File has been modified since read. Read it again before editing.',
-        }
-    }
-
-    const originalFileContents = await readTextFileOrEmpty(absoluteFilePath)
-    const actualOldString = findActualString(originalFileContents, old_string)
-
-    if (actualOldString === null) {
-        return {
-            ok: false,
-            message: `String to replace not found in file.\nString: ${old_string}`,
-        }
-    }
-
-    const matches = actualOldString === ''
-        ? 1
-        : originalFileContents.split(actualOldString).length - 1
-
-    if (matches > 1 && !replace_all) {
-        return {
-            ok: false,
-            message: `Found ${matches} matches of the string to replace, but replace_all is false.`,
-        }
-    }
-
-    return {
-        ok: true,
-        absoluteFilePath,
-        originalFileContents,
-        actualOldString,
-        replaceAll: replace_all,
-    }
-}
-
-
-
-export async function readTextFileOrEmpty(filePath: string): Promise<string> {
+async function pathExists(filePath: string): Promise<boolean> {
     try {
-        return await readFile(filePath, 'utf8')
+        await readFile(filePath)
+        return true
     } catch (error) {
         if (isENOENT(error)) {
-            return ''
+            return false
         }
 
         throw error
     }
 }
 
-export function findActualString(
-    fileContent: string,
-    oldString: string,
-): string | null {
-    if (oldString === '') {
-        return ''
-    }
+async function readTextFileOrNull(filePath: string): Promise<string | null> {
+    try {
+        return await readFile(filePath, 'utf8')
+    } catch (error) {
+        if (isENOENT(error)) {
+            return null
+        }
 
-    if (fileContent.includes(oldString)) {
-        return oldString
+        throw error
     }
-
-    // 模型常常给 \n，但 Windows 文件里可能是 \r\n
-    const crlfOldString = oldString.replaceAll('\n', '\r\n')
-    if (crlfOldString !== oldString && fileContent.includes(crlfOldString)) {
-        return crlfOldString
-    }
-
-    // 反过来也兼容一下：模型给 \r\n，但文件里是 \n
-    const lfOldString = oldString.replaceAll('\r\n', '\n')
-    if (lfOldString !== oldString && fileContent.includes(lfOldString)) {
-        return lfOldString
-    }
-
-    return null
 }
 
-export async function writeTextFile(
+async function writeTextFile(
     filePath: string,
     content: string,
 ): Promise<void> {
