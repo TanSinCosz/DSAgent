@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import type { Runtime } from "./types/type.js";
+import type { Runtime } from "./types/runtime.js";
 import type { Tool } from "./Tools/types.js";
 
 export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY =

@@ -1,5 +1,7 @@
 import { executeToolCall } from "./Tools/executor.js";
-import type { Runtime, State } from "./types/type.js";
+import { createMessage } from "./types/messages.js";
+import type { Runtime } from "./types/runtime.js";
+import type { State } from "./types/state.js";
 import { streamAssistantMessage } from "./query/assistant-stream.js";
 import { createMessagesForQueryBuilder } from "./query/messages.js";
 import { createStreamRequest } from "./query/request.js";
@@ -15,6 +17,7 @@ export type {
 } from "./query/types.js";
 export { buildMessagesForQuery, createMessagesForQueryBuilder } from "./query/messages.js";
 export { createStreamRequest } from "./query/request.js";
+export { applyAutoCompression } from "./auto-compress/index.js";
 
 export async function* query(
   runtime: Runtime,
@@ -60,7 +63,7 @@ export async function* _query(
       throw new Error("Model stream completed without an assistant message.");
     }
 
-    state.Messages.push({ message: assistantMessage });
+    state.Messages.push(createMessage(assistantMessage));
     runtime.toolUseContext.messages = state.Messages;
     yield { type: "assistant_message", message: assistantMessage };
 
@@ -78,7 +81,7 @@ export async function* _query(
         runtime.tools,
         runtime,
       );
-      state.Messages.push({ message: toolResultMessage });
+      state.Messages.push(createMessage(toolResultMessage));
       runtime.toolUseContext.messages = state.Messages;
       yield {
         type: "tool_result",

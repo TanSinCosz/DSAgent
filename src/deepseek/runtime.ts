@@ -6,7 +6,7 @@ import type {
   ChatCompletionCreateParamsStreaming,
 } from "openai/resources/chat/completions";
 
-import type { DeepSeekRuntimeSettings } from "../types/type.js";
+import type { DeepSeekRuntimeSettings } from "../types/config.js";
 
 export interface DeepSeekRuntimeConfig {
   apiKey: string;

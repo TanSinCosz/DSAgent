@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import { LRUCache } from 'lru-cache'
 import { normalize } from 'path'
-import type { Message } from "../types/type.js";
+import type { Message } from "../types/messages.js";
 import type { Tokenizer } from "./utils/Tokenizer.js";
 
 

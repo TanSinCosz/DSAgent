@@ -9,41 +9,25 @@ import {
   type ToolUseContext,
 } from "../Tools/types.js";
 import type { Tokenizer } from "../Tools/utils/Tokenizer.js";
-import type { DeepSeekMessage } from "../deepseek/types.js";
 import { createSessionId } from "../utils/session.js";
+import type { DeepSeekRuntimeSettings } from "./config.js";
+import type { ContextProjectionState, ToolResultBudgetState } from "./context.js";
+import { createState, type State } from "./state.js";
 
 export interface Runtime {
   sessionId: string;
   agentId: "main" | "sub";
-  
+
   cwd: string;
   deepSeekRuntimeConfig: DeepSeekRuntimeSettings;
   deepSeekClient: DeepSeekClient;
   systemPrompt?: string;
+  contextProjectionState?: ContextProjectionState;
   toolResultBudgetState?: ToolResultBudgetState;
-  MemoryConfig: MemoryConfig
-  
+  MemoryConfig: MemoryConfig;
+
   tools: Tools;
   toolUseContext: ToolUseContext;
-}
-
-export interface State {
-  Messages: Message[];
-  mode: "default" | "plan"; 
-}
-
-export interface Message {
-  message: DeepSeekMessage
-}
-
-export interface ToolResultBudgetState {
-  seenIds: Set<string>;
-  replacements: Map<string, string>;
-}
-
-export interface CreateStateOptions {
-  messages?: Message[];
-  mode?: State["mode"];
 }
 
 export interface CreateRuntimeOptions {
@@ -53,6 +37,7 @@ export interface CreateRuntimeOptions {
   deepSeekRuntimeConfig: DeepSeekRuntimeSettings;
   deepSeekClient?: DeepSeekClient;
   systemPrompt?: string;
+  contextProjectionState?: ContextProjectionState;
   toolResultBudgetState?: ToolResultBudgetState;
   MemoryConfig: MemoryConfig;
   tools?: Tools;
@@ -64,13 +49,6 @@ export interface CreateRuntimeOptions {
   agentDefinitions?: AgentDefinitionsResult;
   thinkingConfig?: ThinkingConfig;
   appState?: AppState;
-}
-
-export function createState(options: CreateStateOptions = {}): State {
-  return {
-    Messages: options.messages ?? [],
-    mode: options.mode ?? "default",
-  };
 }
 
 export function createRuntime(options: CreateRuntimeOptions): Runtime {
@@ -86,8 +64,9 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
       options.deepSeekClient ??
       createDeepSeekClient({
         config: options.deepSeekRuntimeConfig,
-      }),
+    }),
     systemPrompt: options.systemPrompt,
+    contextProjectionState: options.contextProjectionState,
     toolResultBudgetState: options.toolResultBudgetState,
     MemoryConfig: options.MemoryConfig,
     tools,
@@ -103,14 +82,4 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
       thinkingConfig: options.thinkingConfig,
     }),
   };
-}
-
-export interface DeepSeekRuntimeSettings {
-  apiKey: string;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  model: string;
-  maxTokens: number;
-  systemPrompt?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
 }

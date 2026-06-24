@@ -5,7 +5,8 @@ import type {
   DeepSeekToolCall,
 } from "../deepseek/types.js";
 import type { SystemPromptOptions } from "../system-prompt.js";
-import type { Runtime, State } from "../types/type.js";
+import type { Runtime } from "../types/runtime.js";
+import type { State } from "../types/state.js";
 
 export type QueryEvent =
   | { type: "context_ready"; systemPrompt: string; messages: DeepSeekMessage[] }

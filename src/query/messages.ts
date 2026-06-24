@@ -3,7 +3,10 @@ import {
   buildSystemPrompt,
   type SystemPromptOptions,
 } from "../system-prompt.js";
-import type { Runtime, State, ToolResultBudgetState } from "../types/type.js";
+import type { ToolResultBudgetState } from "../types/context.js";
+import { toDeepSeekMessage } from "../types/messages.js";
+import type { Runtime } from "../types/runtime.js";
+import type { State } from "../types/state.js";
 import type {
   MessageCompressionStep,
   MessagesForQuery,
@@ -35,8 +38,6 @@ export async function buildMessagesForQuery(
     steps?: readonly MessageCompressionStep[];
   } = {},
 ): Promise<MessagesForQuery> {
-  await applyAutoCompression(runtime, state);
-
   const promptOptions = options.promptOptions ?? {};
   const systemPrompt = await getOrCreateSystemPrompt(runtime, promptOptions);
 
@@ -45,7 +46,7 @@ export async function buildMessagesForQuery(
       role: "system",
       content: systemPrompt,
     },
-    ...state.Messages.map(({ message }) => message),
+    ...state.Messages.map(toDeepSeekMessage),
   ];
 
   messages = applyToolResultBudget(messages, runtime);
@@ -72,14 +73,6 @@ async function getOrCreateSystemPrompt(
   }
 
   return runtime.systemPrompt;
-}
-
-async function applyAutoCompression(
-  _runtime: Runtime,
-  _state: State,
-): Promise<void> {
-  // Reserved for durable auto compaction that mutates state.Messages directly.
-  // Projection-only compression belongs in MessageCompressionStep.
 }
 
 type ToolResultCandidate = {

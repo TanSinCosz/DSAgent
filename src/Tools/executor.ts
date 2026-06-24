@@ -1,5 +1,5 @@
 import type { DeepSeekMessage, DeepSeekToolCall } from "../deepseek/types.js";
-import type { Runtime } from "../types/type.js";
+import type { Runtime } from "../types/runtime.js";
 import type { Tool, Tools } from "./types.js";
 
 export async function executeToolCall(

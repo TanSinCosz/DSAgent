@@ -1,6 +1,6 @@
 
 import { loadConfig } from "./config/load-config.js";
-import type { Runtime } from "./types/type.js";
+import type { Runtime } from "./types/runtime.js";
 import { createSessionId } from "./utils/session.js";
 
 export async function runCli(args: string[]): Promise<void> {

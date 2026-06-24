@@ -3,7 +3,7 @@ import type {
   DeepSeekMessage,
   DeepSeekToolDefinition,
 } from "../deepseek/types.js";
-import type { Runtime } from "../types/type.js";
+import type { Runtime } from "../types/runtime.js";
 import type { Tools } from "../Tools/types.js";
 
 export async function createStreamRequest(
