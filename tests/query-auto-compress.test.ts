@@ -1,0 +1,155 @@
+import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type {
+  DeepSeekChatCompletionResponse,
+  DeepSeekCreateRequest,
+  DeepSeekStreamEnvelope,
+  DeepSeekStreamRequest,
+} from "../src/deepseek/types.js";
+import { query } from "../src/query.js";
+import { createRuntime } from "../src/types/runtime.js";
+import { createState } from "../src/types/state.js";
+import { createMessage } from "../src/types/messages.js";
+
+test("query auto-compresses oversized projections with session memory before model request", async () => {
+  const createRequests: DeepSeekCreateRequest[] = [];
+  const streamRequests: DeepSeekStreamRequest[] = [];
+  const client: DeepSeekClient = {
+    async create(input) {
+      createRequests.push(input);
+      return createSessionMemoryResponse();
+    },
+    async *stream(input) {
+      streamRequests.push(input);
+      yield createAssistantChunk("compressed request accepted");
+      yield {
+        chunk: null,
+        raw: "[DONE]",
+        done: true,
+      };
+    },
+    async collectStream() {
+      throw new Error("collectStream is not used in this test");
+    },
+  };
+  const state = createState({
+    messages: createLargeConversation(),
+  });
+  const runtime = createRuntime({
+    cwd: await mkdtemp(join(tmpdir(), "opencat-auto-compress-")),
+    deepSeekRuntimeConfig: {
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      maxTokens: 1024,
+    },
+    deepSeekClient: client,
+    MemoryConfig: createMemoryConfig(),
+    messages: state.Messages,
+  });
+
+  const events = [];
+  for await (const event of query(runtime, state, { maxTurns: 1 })) {
+    events.push(event);
+  }
+
+  assert.equal(createRequests.length, 1);
+  assert.equal(streamRequests.length, 1);
+  assert.equal(state.sessionMemory.status, "ready");
+  assert.equal(state.autoCompress.summaries.length, 1);
+  assert.ok(state.autoCompress.activeSummaryId);
+
+  const requestMessages = streamRequests[0]!.messages;
+  const summaryMessage = requestMessages.find(
+    (message) =>
+      message.role === "user" &&
+      message.content.includes("<session_memory>"),
+  );
+
+  assert.ok(summaryMessage);
+  assert.ok(requestMessages.length < state.Messages.length);
+  assert.ok(
+    JSON.stringify(requestMessages).length < JSON.stringify(state.Messages).length,
+  );
+  assert.equal(events.at(-1)?.type, "done");
+});
+
+function createLargeConversation() {
+  return Array.from({ length: 220 }, (_, index) =>
+    createMessage({
+      role: "user",
+      content: `message ${index}\n${"large context block ".repeat(260)}`,
+    })
+  );
+}
+
+function createSessionMemoryResponse(): DeepSeekChatCompletionResponse {
+  return {
+    id: "session-memory-response",
+    object: "chat.completion",
+    created: 0,
+    model: "deepseek-v4-flash",
+    choices: [
+      {
+        index: 0,
+        finish_reason: "stop",
+        message: {
+          role: "assistant",
+          content: [
+            "# Session Title",
+            "Auto-compress test",
+            "",
+            "# Current State",
+            "The oversized conversation has been summarized for continuation.",
+            "",
+            "# Task specification",
+            "Verify the query loop uses session memory before the main request.",
+          ].join("\n"),
+        },
+      },
+    ],
+  };
+}
+
+function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
+  return {
+    raw: text,
+    done: false,
+    chunk: {
+      id: "assistant-chunk",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "deepseek-v4-flash",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            role: "assistant",
+            content: text,
+          },
+          finish_reason: "stop",
+        },
+      ],
+    },
+  };
+}
+
+function createMemoryConfig() {
+  return {
+    embedder: {
+      provider: "test",
+      config: {},
+    },
+    vectorStore: {
+      provider: "test",
+      config: {},
+    },
+    llm: {
+      provider: "test",
+      config: {},
+    },
+  };
+}

@@ -1,4 +1,19 @@
 export type { AgentConfig, DeepSeekRuntimeSettings } from "./config.js";
+export {
+  createAgentDefinitions,
+  findAgentDefinition,
+  getActiveAgentsFromList,
+  getBuiltInAgents,
+  type AgentCategory,
+  type AgentDefinition,
+  type AgentDefinitionsResult,
+  type AgentModel,
+  type AgentNotification,
+  type AgentSource,
+  type AgentTask,
+  type AgentTasksState,
+  type AgentTaskStatus,
+} from "../Tools/Agent/index.js";
 export type {
   AutoCompressState,
   AutoCompressSummary,

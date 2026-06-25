@@ -1,11 +1,13 @@
 import type { DeepSeekMessage, DeepSeekToolCall } from "../deepseek/types.js";
 import type { Runtime } from "../types/runtime.js";
+import type { State } from "../types/state.js";
 import type { Tool, Tools } from "./types.js";
 
 export async function executeToolCall(
   toolCall: DeepSeekToolCall,
   tools: Tools,
   runtime: Runtime,
+  state: State,
 ): Promise<DeepSeekMessage> {
   const tool = findTool(tools, toolCall.function.name);
 
@@ -27,6 +29,8 @@ export async function executeToolCall(
     const output = await tool.call(
       validation.input as Record<string, unknown>,
       runtime.toolUseContext,
+      runtime,
+      state,
     );
     return createToolResultMessage(toolCall.id, stringifyToolResult(output));
   } catch (error) {

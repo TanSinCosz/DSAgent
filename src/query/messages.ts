@@ -1,4 +1,5 @@
 import type { DeepSeekMessage } from "../deepseek/types.js";
+import { projectMessagesWithAutoCompress } from "../auto-compress/index.js";
 import {
   buildSystemPrompt,
   type SystemPromptOptions,
@@ -36,9 +37,11 @@ export async function buildMessagesForQuery(
   options: {
     promptOptions?: SystemPromptOptions;
     steps?: readonly MessageCompressionStep[];
+    applyRequestLimits?: boolean;
   } = {},
 ): Promise<MessagesForQuery> {
   const promptOptions = options.promptOptions ?? {};
+  const applyRequestLimits = options.applyRequestLimits ?? true;
   const systemPrompt = await getOrCreateSystemPrompt(runtime, promptOptions);
 
   let messages: DeepSeekMessage[] = [
@@ -46,11 +49,13 @@ export async function buildMessagesForQuery(
       role: "system",
       content: systemPrompt,
     },
-    ...state.Messages.map(toDeepSeekMessage),
+    ...projectMessagesWithAutoCompress(state).map(toDeepSeekMessage),
   ];
 
-  messages = applyToolResultBudget(messages, runtime);
-  messages = applyHistorySnip(messages);
+  if (applyRequestLimits) {
+    messages = applyToolResultBudget(messages, runtime);
+    messages = applyHistorySnip(messages);
+  }
 
   for (const step of options.steps ?? []) {
     messages = await step.apply(messages, { runtime, state, systemPrompt });

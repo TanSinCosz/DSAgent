@@ -1,7 +1,14 @@
 import type { z } from "zod";
 import { LRUCache } from 'lru-cache'
 import { normalize } from 'path'
+import type {
+    AgentDefinition,
+    AgentDefinitionsResult,
+    AgentSource,
+} from "./Agent/definitions.js";
 import type { Message } from "../types/messages.js";
+import type { Runtime } from "../types/runtime.js";
+import type { State } from "../types/state.js";
 import type { Tokenizer } from "./utils/Tokenizer.js";
 
 
@@ -57,6 +64,8 @@ export interface Tool<
     call(
         input: TInput,
         context: ToolUseContext,
+        runtime: Runtime,
+        state: State,
     ): MaybePromise<TOutput>;
 }
 
@@ -252,32 +261,10 @@ export function createSkillRuntimeState(): SkillRuntimeState {
 
 
 // Agent section
-export type AgentDefinitionsResult = {
-    activeAgents: AgentDefinition[]
-    allAgents: AgentDefinition[]
-}
-
-export type AgentSource =
-    | 'built-in'
-    | 'userSettings'
-    | 'projectSettings'
-    | 'localSettings'
-    | 'policySettings'
-    | 'flagSettings'
-    | 'plugin'
-
-export type AgentDefinition = {
-    agentType: string
-    whenToUse: string
-    getSystemPrompt: () => string
-
-    source: AgentSource
-
-    tools?: string[]
-    disallowedTools?: string[]
-    model?: string
-    permissionMode?: PermissionMode
-    maxTurns?: number
+export type {
+    AgentDefinition,
+    AgentDefinitionsResult,
+    AgentSource,
 }
 
 // AppState section 

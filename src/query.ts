@@ -3,9 +3,10 @@ import { createMessage } from "./types/messages.js";
 import type { Runtime } from "./types/runtime.js";
 import type { State } from "./types/state.js";
 import { streamAssistantMessage } from "./query/assistant-stream.js";
-import { createMessagesForQueryBuilder } from "./query/messages.js";
+import { buildMessagesForQuery } from "./query/messages.js";
 import { createStreamRequest } from "./query/request.js";
-import type { QueryEvent, QueryOptions } from "./query/types.js";
+import type { MessagesForQuery, QueryEvent, QueryOptions } from "./query/types.js";
+import { applyAutoCompression } from "./auto-compress/index.js";
 
 export type {
   MessageCompressionContext,
@@ -18,6 +19,8 @@ export type {
 export { buildMessagesForQuery, createMessagesForQueryBuilder } from "./query/messages.js";
 export { createStreamRequest } from "./query/request.js";
 export { applyAutoCompression } from "./auto-compress/index.js";
+
+const DEFAULT_AUTO_COMPRESS_TRIGGER_TOKENS = 160_000;
 
 export async function* query(
   runtime: Runtime,
@@ -33,13 +36,14 @@ export async function* _query(
   options: QueryOptions = {},
 ): AsyncGenerator<QueryEvent, void, void> {
   const maxTurns = options.maxTurns ?? 10;
-  const buildMessagesForQuery =
-    options.messagesForQueryBuilder ??
-    createMessagesForQueryBuilder(options.promptOptions);
   const client = runtime.deepSeekClient;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
-    const messagesForQuery = await buildMessagesForQuery(runtime, state);
+    const messagesForQuery = await prepareMessagesForQuery(
+      runtime,
+      state,
+      options,
+    );
     yield {
       type: "context_ready",
       systemPrompt: messagesForQuery.systemPrompt,
@@ -80,6 +84,7 @@ export async function* _query(
         toolCall,
         runtime.tools,
         runtime,
+        state,
       );
       state.Messages.push(createMessage(toolResultMessage));
       runtime.toolUseContext.messages = state.Messages;
@@ -94,4 +99,53 @@ export async function* _query(
   }
 
   yield { type: "done", reason: "max_turns" };
+}
+
+async function prepareMessagesForQuery(
+  runtime: Runtime,
+  state: State,
+  options: QueryOptions,
+): Promise<MessagesForQuery> {
+  if (options.messagesForQueryBuilder) {
+    let messagesForQuery = await options.messagesForQueryBuilder(runtime, state);
+    if (shouldApplyAutoCompression(messagesForQuery)) {
+      const result = await applyAutoCompression(runtime, state);
+      if (result.status === "compressed") {
+        messagesForQuery = await options.messagesForQueryBuilder(runtime, state);
+      }
+    }
+    return messagesForQuery;
+  }
+
+  const projectedMessages = await buildMessagesForQuery(runtime, state, {
+    promptOptions: options.promptOptions,
+    applyRequestLimits: false,
+  });
+
+  if (shouldApplyAutoCompression(projectedMessages)) {
+    await applyAutoCompression(runtime, state);
+  }
+
+  return buildMessagesForQuery(runtime, state, {
+    promptOptions: options.promptOptions,
+  });
+}
+
+function shouldApplyAutoCompression(messagesForQuery: MessagesForQuery): boolean {
+  return estimateMessagesForQueryTokens(messagesForQuery) >=
+    getAutoCompressTriggerTokens();
+}
+
+function estimateMessagesForQueryTokens(messagesForQuery: MessagesForQuery): number {
+  return Math.ceil(JSON.stringify(messagesForQuery.messages).length / 4);
+}
+
+function getAutoCompressTriggerTokens(): number {
+  const configured = Number(process.env.OPENCAT_AUTO_COMPRESS_TRIGGER_TOKENS);
+
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+
+  return DEFAULT_AUTO_COMPRESS_TRIGGER_TOKENS;
 }

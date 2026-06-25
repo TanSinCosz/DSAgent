@@ -1,4 +1,10 @@
 import type { AutoCompressState } from "./context.js";
+import {
+  createAgentNotificationsState,
+  createAgentTasksState,
+  type AgentNotification,
+  type AgentTasksState,
+} from "../Tools/Agent/state.js";
 import type { Message } from "./messages.js";
 import {
   createSessionMemoryState,
@@ -10,6 +16,8 @@ export interface State {
   autoCompress: AutoCompressState;
   sessionMemory: SessionMemoryState;
   mode: "default" | "plan";
+  agentTasks: AgentTasksState;
+  agentNotifications: AgentNotification[];
 }
 
 export interface CreateStateOptions {
@@ -17,6 +25,8 @@ export interface CreateStateOptions {
   autoCompress?: AutoCompressState;
   sessionMemory?: SessionMemoryState;
   mode?: State["mode"];
+  agentTasks?: AgentTasksState;
+  agentNotifications?: AgentNotification[];
 }
 
 export function createState(options: CreateStateOptions = {}): State {
@@ -28,5 +38,8 @@ export function createState(options: CreateStateOptions = {}): State {
     },
     sessionMemory: options.sessionMemory ?? createSessionMemoryState(),
     mode: options.mode ?? "default",
+    agentTasks: options.agentTasks ?? createAgentTasksState(),
+    agentNotifications: options.agentNotifications ??
+      createAgentNotificationsState(),
   };
 }

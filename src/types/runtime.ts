@@ -1,4 +1,6 @@
 import type { MemoryConfig } from "../Memory/type.js";
+import { createAgentDefinitions } from "../Tools/Agent/index.js";
+import { createDefaultTools } from "../Tools/index.js";
 import { createDeepSeekClient, type DeepSeekClient } from "../deepseek/client.js";
 import {
   createToolUseContext,
@@ -12,12 +14,14 @@ import type { Tokenizer } from "../Tools/utils/Tokenizer.js";
 import { createSessionId } from "../utils/session.js";
 import type { DeepSeekRuntimeSettings } from "./config.js";
 import type { ContextProjectionState, ToolResultBudgetState } from "./context.js";
-import { createState, type State } from "./state.js";
+import type { Message } from "./messages.js";
 
 export interface Runtime {
+  // Runtime identity.
   sessionId: string;
   agentId: "main" | "sub";
 
+  // Runtime capabilities and configuration.
   cwd: string;
   deepSeekRuntimeConfig: DeepSeekRuntimeSettings;
   deepSeekClient: DeepSeekClient;
@@ -31,6 +35,7 @@ export interface Runtime {
 }
 
 export interface CreateRuntimeOptions {
+  // Runtime fields.
   sessionId?: string;
   agentId?: Runtime["agentId"];
   cwd?: string;
@@ -41,7 +46,9 @@ export interface CreateRuntimeOptions {
   toolResultBudgetState?: ToolResultBudgetState;
   MemoryConfig: MemoryConfig;
   tools?: Tools;
-  state?: State;
+
+  // ToolUseContext fields.
+  messages?: Message[];
   abortController?: AbortController;
   tokenizer?: Tokenizer;
   isNonInteractiveSession?: boolean;
@@ -52,8 +59,8 @@ export interface CreateRuntimeOptions {
 }
 
 export function createRuntime(options: CreateRuntimeOptions): Runtime {
-  const state = options.state ?? createState();
-  const tools = options.tools ?? [];
+  const agentDefinitions = options.agentDefinitions ?? createAgentDefinitions();
+  const tools = options.tools ?? createDefaultTools({ agentDefinitions });
 
   return {
     sessionId: options.sessionId ?? createSessionId(),
@@ -72,13 +79,13 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
     tools,
     toolUseContext: createToolUseContext({
       tools,
-      messages: state.Messages,
+      messages: options.messages,
       appState: options.appState,
       abortController: options.abortController,
       tokenizer: options.tokenizer,
       isNonInteractiveSession: options.isNonInteractiveSession,
       mainLoopModel: options.mainLoopModel,
-      agentDefinitions: options.agentDefinitions,
+      agentDefinitions,
       thinkingConfig: options.thinkingConfig,
     }),
   };

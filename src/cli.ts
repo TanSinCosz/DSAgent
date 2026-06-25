@@ -1,25 +1,144 @@
 
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
+
 import { loadConfig } from "./config/load-config.js";
+import type { MemoryConfig } from "./Memory/type.js";
+import { query } from "./query.js";
+import { createMessage } from "./types/messages.js";
+import { createRuntime } from "./types/runtime.js";
+import { createState, type State } from "./types/state.js";
 import type { Runtime } from "./types/runtime.js";
-import { createSessionId } from "./utils/session.js";
 
 export async function runCli(args: string[]): Promise<void> {
-    const prompt = args.join(" ").trim();
+  const runtime = createRuntime({
+    cwd: process.cwd(),
+    deepSeekRuntimeConfig: loadConfig(),
+    MemoryConfig: createCliMemoryConfig(),
+  });
+  const state = createState();
+  const firstPrompt = args.join(" ").trim();
 
-    if (!prompt) {
-        console.error("Please provide a prompt.");
-        process.exitCode = 1;
-        return;
+  console.log(`Session: ${runtime.sessionId}`);
+  console.log(`Model: ${runtime.deepSeekRuntimeConfig.model}`);
+  console.log(`Tools: ${runtime.tools.map((tool) => tool.name).join(", ")}`);
+  console.log("Type /exit to quit.");
+
+  const readline = createInterface({ input, output });
+  let shouldExit = false;
+
+  readline.on("SIGINT", () => {
+    shouldExit = true;
+    readline.close();
+    output.write("\n");
+  });
+
+  try {
+    if (firstPrompt) {
+      await runUserPrompt(firstPrompt, runtime, state);
     }
 
-    const config = loadConfig();
-    const runtime: Runtime = {
-        sessionId: createSessionId(),
-        cwd: process.cwd(),
-        config
-    };
+    while (!shouldExit) {
+      drainAgentNotifications(state);
+      const prompt = (await readline.question("\n> ")).trim();
 
-    console.log(`Session: ${runtime.sessionId}`);
-    console.log(`Model: ${runtime.config.model}`);
-    console.log(`Prompt: ${prompt}`);
+      if (!prompt) {
+        continue;
+      }
+
+      if (prompt === "/exit" || prompt === "/quit") {
+        break;
+      }
+
+      await runUserPrompt(prompt, runtime, state);
+    }
+  } finally {
+    readline.close();
+  }
+}
+
+async function runUserPrompt(
+  prompt: string,
+  runtime: Runtime,
+  state: State,
+): Promise<void> {
+  state.Messages.push(createMessage({
+    role: "user",
+    content: prompt,
+  }));
+  runtime.toolUseContext.messages = state.Messages;
+
+  let assistantHasOutput = false;
+
+  try {
+    for await (const event of query(runtime, state)) {
+      switch (event.type) {
+        case "assistant_text_delta": {
+          if (!assistantHasOutput) {
+            output.write("\nassistant> ");
+            assistantHasOutput = true;
+          }
+          output.write(event.text);
+          break;
+        }
+        case "tool_use": {
+          if (assistantHasOutput) {
+            output.write("\n");
+            assistantHasOutput = false;
+          }
+          output.write(`[tool] ${event.toolCall.function.name}\n`);
+          break;
+        }
+        case "assistant_message": {
+          if (!assistantHasOutput && event.message.content) {
+            output.write(`\nassistant> ${event.message.content}\n`);
+          }
+          break;
+        }
+        case "done": {
+          if (assistantHasOutput) {
+            output.write("\n");
+          }
+          if (event.reason === "max_turns") {
+            output.write("[done] max turns reached\n");
+          }
+          break;
+        }
+      }
+    }
+  } catch (error) {
+    output.write(`\n[error] ${stringifyError(error)}\n`);
+  }
+}
+
+function drainAgentNotifications(state: State): void {
+  while (state.agentNotifications.length > 0) {
+    const notification = state.agentNotifications.shift()!;
+    output.write(`\n${notification.message}\n`);
+  }
+}
+
+function createCliMemoryConfig(): MemoryConfig {
+  return {
+    embedder: {
+      provider: "cli",
+      config: {},
+    },
+    vectorStore: {
+      provider: "cli",
+      config: {},
+    },
+    llm: {
+      provider: "cli",
+      config: {},
+    },
+  };
+}
+
+function stringifyError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }

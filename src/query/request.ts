@@ -4,7 +4,8 @@ import type {
   DeepSeekToolDefinition,
 } from "../deepseek/types.js";
 import type { Runtime } from "../types/runtime.js";
-import type { Tools } from "../Tools/types.js";
+import type { JSONSchemaObject, Tool, Tools } from "../Tools/types.js";
+import { z } from "zod";
 
 export async function createStreamRequest(
   runtime: Runtime,
@@ -38,12 +39,23 @@ async function toDeepSeekTools(
       function: {
         name: tool.name,
         description: await tool.description(),
-        parameters: {
-          type: "object",
-          additionalProperties: true,
-        },
+        parameters: toToolInputParameters(tool),
         strict: tool.strict,
       },
     })),
   );
+}
+
+function toToolInputParameters(tool: Tool): JSONSchemaObject {
+  const schema =
+    typeof tool.inputSchema === "function" ? tool.inputSchema() : tool.inputSchema;
+
+  try {
+    return z.toJSONSchema(schema) as JSONSchemaObject;
+  } catch {
+    return {
+      type: "object",
+      additionalProperties: true,
+    };
+  }
 }
