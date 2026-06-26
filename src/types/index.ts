@@ -1,9 +1,11 @@
 export type { AgentConfig, DeepSeekRuntimeSettings } from "./config.js";
 export {
   createAgentDefinitions,
+  drainAgentMessages,
   findAgentDefinition,
   getActiveAgentsFromList,
   getBuiltInAgents,
+  queueAgentMessage,
   type AgentCategory,
   type AgentDefinition,
   type AgentDefinitionsResult,
@@ -51,6 +53,10 @@ export {
   type TranscriptStateSnapshotEntry,
   type TranscriptStore,
 } from "../transcript/persistence.js";
+export {
+  persistLargeToolResultIfNeeded,
+  type PersistToolResultOptions,
+} from "../tool-results/persistence.js";
 export {
   createSessionMemoryState,
   DEFAULT_SESSION_MEMORY_CONFIG,

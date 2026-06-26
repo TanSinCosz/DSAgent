@@ -62,6 +62,11 @@ export async function updateSessionMemoryForAutoCompress(
         },
       ],
       max_tokens: runtime.deepSeekRuntimeConfig.maxTokens,
+      reasoning_effort:
+        runtime.deepSeekRuntimeConfig.reasoningEffort === "high" ||
+        runtime.deepSeekRuntimeConfig.reasoningEffort === "max"
+          ? runtime.deepSeekRuntimeConfig.reasoningEffort
+          : undefined,
       temperature: 0,
     });
     content = response.choices[0]?.message.content?.trim();

@@ -1,5 +1,6 @@
 import { executeToolCall } from "./Tools/executor.js";
-import { createMessage } from "./types/messages.js";
+import { createMessage, toDeepSeekMessage, type ToolMessage } from "./types/messages.js";
+import { persistLargeToolResultIfNeeded } from "./tool-results/persistence.js";
 import type { Runtime } from "./types/runtime.js";
 import type { State } from "./types/state.js";
 import { streamAssistantMessage } from "./query/assistant-stream.js";
@@ -43,11 +44,19 @@ export async function flushAgentNotificationsToMessagesAndTranscript(
   runtime: Runtime,
   state: State,
 ): Promise<number> {
+  if (runtime.agentRole !== "main") {
+    return 0;
+  }
+
   const beforeCount = state.Messages.length;
   const flushed = flushAgentNotificationsToMessages(state);
 
   for (const message of state.Messages.slice(beforeCount)) {
     await recordTranscriptMessage(runtime, message);
+  }
+
+  if (flushed > 0) {
+    await recordTranscriptStateSnapshot(runtime, state, "agent_notification");
   }
 
   return flushed;
@@ -66,14 +75,10 @@ export async function* _query(
   state: State,
   options: QueryOptions = {},
 ): AsyncGenerator<QueryEvent, void, void> {
-  const maxTurns = options.maxTurns ?? 10;
+  const maxTurns = options.maxTurns ?? 100;
   const client = runtime.deepSeekClient;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
-    if (await flushAgentNotificationsToMessagesAndTranscript(runtime, state) > 0) {
-      runtime.toolUseContext.messages = state.Messages;
-    }
-
     const messagesForQuery = await prepareMessagesForQuery(
       runtime,
       state,
@@ -123,14 +128,21 @@ export async function* _query(
         runtime,
         state,
       );
-      const persistedToolResultMessage = createMessage(toolResultMessage);
+      const persistedToolResultMessage = await persistLargeToolResultIfNeeded({
+        runtime,
+        message: createMessage(toolResultMessage) as ToolMessage,
+        toolName: toolCall.function.name,
+        maxResultSizeChars: runtime.tools.find((tool) =>
+          tool.name === toolCall.function.name
+        )?.maxResultSizeChars,
+      });
       state.Messages.push(persistedToolResultMessage);
       await recordTranscriptMessage(runtime, persistedToolResultMessage);
       runtime.toolUseContext.messages = state.Messages;
       yield {
         type: "tool_result",
         toolCall,
-        message: toolResultMessage,
+        message: toDeepSeekMessage(persistedToolResultMessage),
       };
     }
 
@@ -154,6 +166,10 @@ async function prepareMessagesForQuery(
         messagesForQuery = await options.messagesForQueryBuilder(runtime, state);
       }
     }
+    if (await flushAgentNotificationsToMessagesAndTranscript(runtime, state) > 0) {
+      runtime.toolUseContext.messages = state.Messages;
+      messagesForQuery = await options.messagesForQueryBuilder(runtime, state);
+    }
     return messagesForQuery;
   }
 
@@ -167,6 +183,10 @@ async function prepareMessagesForQuery(
     if (result.status === "compressed") {
       await recordTranscriptStateSnapshot(runtime, state, "auto_compress");
     }
+  }
+
+  if (await flushAgentNotificationsToMessagesAndTranscript(runtime, state) > 0) {
+    runtime.toolUseContext.messages = state.Messages;
   }
 
   return buildMessagesForQuery(runtime, state, {

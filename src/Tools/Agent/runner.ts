@@ -6,6 +6,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { query } from "../../query.js";
+import { buildMessagesForQuery } from "../../query/messages.js";
+import {
+  recordTranscriptMessage,
+  recordTranscriptStateSnapshot,
+} from "../../transcript/persistence.js";
 import { createMessage, type Message } from "../../types/messages.js";
 import {
   createRuntime,
@@ -21,6 +26,7 @@ import type {
 } from "../types.js";
 import { cloneFileStateCache } from "../types.js";
 import type { AgentDefinition } from "./definitions.js";
+import { drainAgentMessages } from "./state.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -108,7 +114,7 @@ async function launchAsyncAgent(options: RunAgentOptions): Promise<AgentAsyncLau
   })
     .then(async (result) => {
       await writeAgentOutput(outputFile, result);
-      completeAgentTask(options, agentId, result.result, outputFile, result);
+      await completeAgentTask(options, agentId, result.result, outputFile, result);
     })
     .catch(async (error) => {
       const message = stringifyError(error);
@@ -121,7 +127,7 @@ async function launchAsyncAgent(options: RunAgentOptions): Promise<AgentAsyncLau
         error: message,
         ...finalizedWorktree,
       });
-      failAgentTask(options, agentId, message, outputFile, finalizedWorktree);
+      await failAgentTask(options, agentId, message, outputFile, finalizedWorktree);
     });
 
   return {
@@ -162,14 +168,24 @@ async function runAgentSynchronously(
   try {
     for await (const event of query(childRuntime, childState, {
       maxTurns: options.maxTurns ?? options.agentDefinition.maxTurns ?? 10,
-      promptOptions: options.mode === "fork"
-        ? undefined
-        : {
-          outputStyle: {
-            name: `${options.agentDefinition.agentType} agent`,
-            prompt: options.agentDefinition.getSystemPrompt(),
-          },
-        },
+      messagesForQueryBuilder: async (runtime, state) => {
+        await drainPendingAgentMessagesIntoChildContext(
+          options,
+          agentId,
+          runtime,
+          state,
+        );
+        return buildMessagesForQuery(runtime, state, {
+          promptOptions: options.mode === "fork"
+            ? undefined
+            : {
+              outputStyle: {
+                name: `${options.agentDefinition.agentType} agent`,
+                prompt: options.agentDefinition.getSystemPrompt(),
+              },
+            },
+        });
+      },
     })) {
       if (event.type === "assistant_message" && event.message.content) {
         result = event.message.content;
@@ -179,7 +195,7 @@ async function runAgentSynchronously(
     finalizedWorktree = await finalizeAgentWorktree(worktree);
 
     if (shouldRecordLifecycle) {
-      completeAgentTask(options, agentId, result, undefined, finalizedWorktree);
+      await completeAgentTask(options, agentId, result, undefined, finalizedWorktree);
     }
 
     return {
@@ -196,7 +212,7 @@ async function runAgentSynchronously(
     finalizedWorktree = await preserveAgentWorktreeAfterFailure(worktree);
 
     if (shouldRecordLifecycle) {
-      failAgentTask(
+      await failAgentTask(
         options,
         agentId,
         stringifyError(error),
@@ -294,6 +310,46 @@ function createChildAgentRuntime(
       ? cloneFileStateCache(parent.toolUseContext.readFileState)
       : undefined,
   });
+}
+
+async function drainPendingAgentMessagesIntoChildContext(
+  options: RunAgentOptions,
+  agentId: string,
+  childRuntime: Runtime,
+  childState: State,
+): Promise<number> {
+  const messages = drainAgentMessages(options.parentState.agentTasks, agentId);
+  if (messages.length === 0) {
+    return 0;
+  }
+
+  const message = createMessage({
+    role: "user",
+    content: renderPendingAgentMessages(messages),
+  });
+  childState.Messages.push(message);
+  childRuntime.toolUseContext.messages = childState.Messages;
+  await recordTranscriptMessage(childRuntime, message);
+
+  return messages.length;
+}
+
+function renderPendingAgentMessages(messages: readonly string[]): string {
+  const renderedMessages = messages
+    .map((message, index) => [
+      `<message index="${index + 1}">`,
+      message,
+      `</message>`,
+    ].join("\n"))
+    .join("\n\n");
+
+  return [
+    `<agent-messages>`,
+    `The parent agent sent the following queued message${messages.length === 1 ? "" : "s"}.`,
+    `Use the newest instructions together with your original task.`,
+    renderedMessages,
+    `</agent-messages>`,
+  ].join("\n");
 }
 
 function deriveChildAppState(options: RunAgentOptions): AppState {
@@ -430,18 +486,19 @@ function registerAgentTask(
     status: "running",
     createdAt: now,
     updatedAt: now,
+    pendingMessages: [],
     outputFile,
     ...worktreeToOutput(worktree),
   };
 }
 
-function completeAgentTask(
+async function completeAgentTask(
   options: RunAgentOptions,
   agentId: string,
   result: string,
   outputFile?: string,
   worktree?: FinalizedWorktree,
-): void {
+): Promise<void> {
   const now = Date.now();
   const existing = options.parentState.agentTasks[agentId];
 
@@ -455,17 +512,17 @@ function completeAgentTask(
   };
 
   if (outputFile || worktree?.worktreePath) {
-    enqueueAgentNotification(options, agentId, "completed", outputFile, worktree);
+    await enqueueAgentNotification(options, agentId, "completed", outputFile, worktree);
   }
 }
 
-function failAgentTask(
+async function failAgentTask(
   options: RunAgentOptions,
   agentId: string,
   error: string,
   outputFile?: string,
   worktree?: FinalizedWorktree,
-): void {
+): Promise<void> {
   const now = Date.now();
   const existing = options.parentState.agentTasks[agentId];
 
@@ -479,7 +536,7 @@ function failAgentTask(
   };
 
   if (outputFile || worktree?.worktreePath) {
-    enqueueAgentNotification(options, agentId, "failed", outputFile, worktree);
+    await enqueueAgentNotification(options, agentId, "failed", outputFile, worktree);
   }
 }
 
@@ -499,17 +556,18 @@ function createTaskFallback(
     status: "running" as const,
     createdAt: now,
     updatedAt: now,
+    pendingMessages: [],
     outputFile,
   };
 }
 
-function enqueueAgentNotification(
+async function enqueueAgentNotification(
   options: RunAgentOptions,
   agentId: string,
   status: "completed" | "failed",
   outputFile?: string,
   worktree?: FinalizedWorktree,
-): void {
+): Promise<void> {
   options.parentState.agentNotifications.push({
     id: `agent_notification_${randomUUID()}`,
     agentTaskId: agentId,
@@ -527,6 +585,11 @@ function enqueueAgentNotification(
     outputFile,
     ...worktree,
   });
+  await recordTranscriptStateSnapshot(
+    options.parentRuntime,
+    options.parentState,
+    "agent_notification",
+  );
 }
 
 function buildAgentNotificationMessage(

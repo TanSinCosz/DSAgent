@@ -77,6 +77,69 @@ test("query auto-compresses oversized projections with session memory before mod
   assert.equal(events.at(-1)?.type, "done");
 });
 
+test("query flushes agent notifications after auto-compression", async () => {
+  const notificationText = "<task-notification>agent finished after compact</task-notification>";
+  const createRequests: DeepSeekCreateRequest[] = [];
+  const streamRequests: DeepSeekStreamRequest[] = [];
+  const client: DeepSeekClient = {
+    async create(input) {
+      createRequests.push(input);
+      return createSessionMemoryResponse();
+    },
+    async *stream(input) {
+      streamRequests.push(input);
+      yield createAssistantChunk("notification received");
+      yield {
+        chunk: null,
+        raw: "[DONE]",
+        done: true,
+      };
+    },
+    async collectStream() {
+      throw new Error("collectStream is not used in this test");
+    },
+  };
+  const state = createState({
+    messages: createLargeConversation(),
+    agentNotifications: [
+      {
+        id: "agent_notification_after_compact",
+        agentTaskId: "agent_task_after_compact",
+        agentType: "worker",
+        description: "finish isolated work",
+        status: "completed",
+        createdAt: 1,
+        message: notificationText,
+      },
+    ],
+  });
+  const runtime = createRuntime({
+    cwd: await mkdtemp(join(tmpdir(), "opencat-auto-compress-notification-")),
+    deepSeekRuntimeConfig: {
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      maxTokens: 1024,
+    },
+    deepSeekClient: client,
+    MemoryConfig: createMemoryConfig(),
+    messages: state.Messages,
+  });
+
+  for await (const _event of query(runtime, state, { maxTurns: 1 })) {
+    // Drain the query stream.
+  }
+
+  assert.equal(createRequests.length, 1);
+  assert.equal(streamRequests.length, 1);
+  assert.equal(state.agentNotifications.length, 0);
+
+  const sessionMemoryRequestText = JSON.stringify(createRequests[0]!.messages);
+  const mainRequestText = JSON.stringify(streamRequests[0]!.messages);
+
+  assert.doesNotMatch(sessionMemoryRequestText, /agent finished after compact/);
+  assert.match(mainRequestText, /agent finished after compact/);
+});
+
 function createLargeConversation() {
   return Array.from({ length: 220 }, (_, index) =>
     createMessage({

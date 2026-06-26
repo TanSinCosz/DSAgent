@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "node --watch --experimental-strip-types src/main.ts",
+    "web": "tsx src/web-cli.ts",
     "deepseek:example": "tsx src/deepseek/example.ts",
     "smoke:auto-compress:real": "tsx scripts/smoke-auto-compress-real.ts",
     "test:auto-compress": "tsx --test tests/query-auto-compress.test.ts",

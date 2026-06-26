@@ -187,6 +187,37 @@ test("transcript restore hydrates only post auto-compress messages by default", 
   assert.equal(full.Messages.length, 3);
 });
 
+test("transcript restore keeps pending agent notifications from snapshots", async () => {
+  const runtime = createRuntime({
+    cwd: await mkdtemp(join(tmpdir(), "opencat-agent-notification-transcript-")),
+    sessionId: "session_agent_notification_restore",
+    deepSeekRuntimeConfig: createRuntimeConfig(),
+    deepSeekClient: createNoopClient(),
+    MemoryConfig: createMemoryConfig(),
+  });
+  const state = createState({
+    agentNotifications: [
+      {
+        id: "agent_notification_restore",
+        agentTaskId: "agent_restore",
+        agentType: "worker",
+        description: "restore notification",
+        status: "completed",
+        createdAt: 1,
+        message: "<task-notification>restored</task-notification>",
+      },
+    ],
+  });
+
+  await recordTranscriptStateSnapshot(runtime, state, "agent_notification");
+
+  const restored = await loadStateFromTranscript(runtime.transcriptStore!);
+
+  assert.ok(restored);
+  assert.equal(restored.agentNotifications.length, 1);
+  assert.equal(restored.agentNotifications[0]?.id, "agent_notification_restore");
+});
+
 function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
   return {
     raw: text,

@@ -12,6 +12,10 @@ export {
   findAgentDefinition,
   getActiveAgentsFromList,
 } from "./registry.js";
+export {
+  drainAgentMessages,
+  queueAgentMessage,
+} from "./state.js";
 export type {
   AgentCategory,
   AgentDefinition,

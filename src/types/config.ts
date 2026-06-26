@@ -14,3 +14,16 @@ export interface DeepSeekRuntimeSettings {
   systemPrompt?: string;
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
 }
+
+export const FORCED_DEEPSEEK_MODEL = "deepseek-v4-pro";
+export const FORCED_DEEPSEEK_REASONING_EFFORT = "max";
+
+export function forceDeepSeekRuntimeSettings(
+  settings: DeepSeekRuntimeSettings,
+): DeepSeekRuntimeSettings {
+  return {
+    ...settings,
+    model: FORCED_DEEPSEEK_MODEL,
+    reasoningEffort: FORCED_DEEPSEEK_REASONING_EFFORT,
+  };
+}

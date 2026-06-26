@@ -18,9 +18,10 @@ Usage notes:
 - Use subagent_type to select a specialized agent. If omitted, general-purpose is used.
 - execution_mode controls how the agent runs:
   - sync: run the agent now and wait for its result.
-  - async: launch the agent in the background and return an output file path.
+  - async: launch the agent in the background and return an agentId plus output file path.
   - fork: inherit the parent conversation context and run the directive in that context.
 - run_in_background is supported as an alias for execution_mode: async.
+- For async agents, use SendMessage with the returned agentId when you need to queue follow-up instructions while the agent is still running.
 - Fork mode should be used when the child needs the parent's context but its detailed tool output should stay out of the parent conversation.
 - Set isolation: "worktree" when an agent may edit files independently. This runs it in a temporary git worktree. If it makes changes, the worktree path is returned; if it makes no changes, the worktree is cleaned up.`;
 }

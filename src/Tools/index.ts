@@ -10,6 +10,7 @@ import { FileWrite } from "./FileWrite/FileWrite.js";
 import { Glob } from "./Glob/Glob.js";
 import { Grep } from "./Grep/Grep.js";
 import { MemorySave } from "./MemorySave/MemorySave.js";
+import { SendMessage } from "./SendMessage/SendMessage.js";
 import type { Tools } from "./types.js";
 
 export type CreateDefaultToolsOptions = {
@@ -30,6 +31,7 @@ export function createDefaultTools(
     new Glob(),
     new Grep(),
     new MemorySave(),
+    new SendMessage(),
   ];
 }
 
@@ -42,6 +44,7 @@ export {
   Glob,
   Grep,
   MemorySave,
+  SendMessage,
 };
 
 export type { Tool, Tools, ToolUseContext } from "./types.js";

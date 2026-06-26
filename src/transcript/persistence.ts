@@ -14,6 +14,7 @@ const TRANSCRIPT_STORE_VERSION = 1;
 const TRANSCRIPT_DIR = ".opencat/transcripts";
 
 export type TranscriptSnapshotReason =
+  | "agent_notification"
   | "auto_compress"
   | "manual"
   | "query"

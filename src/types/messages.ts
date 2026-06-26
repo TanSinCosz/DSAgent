@@ -15,12 +15,22 @@ type MessageMeta = {
   createdAt: number;
 };
 
+export type PersistedToolResult = {
+  path: string;
+  absolutePath: string;
+  size: number;
+  sha256: string;
+  previewChars: number;
+  originalContentType: "text";
+};
+
 export type SystemMessage = DeepSeekSystemMessage & MessageMeta;
 export type UserMessage = DeepSeekUserMessage & MessageMeta;
 export type AssistantMessage = DeepSeekAssistantMessage & MessageMeta;
 export type ToolMessage = DeepSeekToolMessage & MessageMeta & {
   toolName?: string;
   toolResultId?: ToolResultId;
+  persistedToolResult?: PersistedToolResult;
 };
 
 export type Message =
@@ -57,6 +67,7 @@ export function toDeepSeekMessage(message: Message): DeepSeekMessage {
         createdAt: _createdAt,
         toolName: _toolName,
         toolResultId: _toolResultId,
+        persistedToolResult: _persistedToolResult,
         ...deepSeekMessage
       } = message;
       return deepSeekMessage;

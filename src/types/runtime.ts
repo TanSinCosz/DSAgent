@@ -24,7 +24,10 @@ import {
 } from "../Tools/types.js";
 import type { Tokenizer } from "../Tools/utils/Tokenizer.js";
 import { createSessionId } from "../utils/session.js";
-import type { DeepSeekRuntimeSettings } from "./config.js";
+import {
+  forceDeepSeekRuntimeSettings,
+  type DeepSeekRuntimeSettings,
+} from "./config.js";
 import type { ContextProjectionState, ToolResultBudgetState } from "./context.js";
 import type { Message } from "./messages.js";
 
@@ -97,6 +100,9 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
   const agentDefinitions = options.agentDefinitions ?? createAgentDefinitions();
   const tools = options.tools ?? createDefaultTools({ agentDefinitions });
   const cwd = options.cwd ?? process.cwd();
+  const deepSeekRuntimeConfig = forceDeepSeekRuntimeSettings(
+    options.deepSeekRuntimeConfig,
+  );
   const transcriptStore = options.transcriptStore === false
     ? undefined
     : options.transcriptStore ??
@@ -116,11 +122,11 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
     parentAgentId: options.parentAgentId,
     agentType: options.agentType,
     cwd,
-    deepSeekRuntimeConfig: options.deepSeekRuntimeConfig,
+    deepSeekRuntimeConfig,
     deepSeekClient:
       options.deepSeekClient ??
       createDeepSeekClient({
-        config: options.deepSeekRuntimeConfig,
+        config: deepSeekRuntimeConfig,
     }),
     systemPrompt: options.systemPrompt,
     contextProjectionState: options.contextProjectionState,

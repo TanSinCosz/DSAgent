@@ -15,6 +15,7 @@ export type AgentTask = {
   status: AgentTaskStatus;
   createdAt: number;
   updatedAt: number;
+  pendingMessages: string[];
   outputFile?: string;
   worktreePath?: string;
   worktreeBranch?: string;
@@ -47,4 +48,33 @@ export function createAgentTasksState(): AgentTasksState {
 
 export function createAgentNotificationsState(): AgentNotification[] {
   return [];
+}
+
+export function queueAgentMessage(
+  tasks: AgentTasksState,
+  agentId: string,
+  message: string,
+): boolean {
+  const task = tasks[agentId];
+  if (!task || task.status !== "running") {
+    return false;
+  }
+
+  task.pendingMessages.push(message);
+  task.updatedAt = Date.now();
+  return true;
+}
+
+export function drainAgentMessages(
+  tasks: AgentTasksState,
+  agentId: string,
+): string[] {
+  const task = tasks[agentId];
+  if (!task || task.pendingMessages.length === 0) {
+    return [];
+  }
+
+  const drained = task.pendingMessages.splice(0);
+  task.updatedAt = Date.now();
+  return drained;
 }

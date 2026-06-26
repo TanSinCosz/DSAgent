@@ -9,6 +9,10 @@ import { promisify } from "node:util";
 
 import { Agent } from "../src/Tools/Agent/Agent.js";
 import { createAgentDefinitions } from "../src/Tools/Agent/index.js";
+import {
+  drainAgentMessages,
+  queueAgentMessage,
+} from "../src/Tools/Agent/state.js";
 import type { AgentOutput } from "../src/Tools/Agent/runner.js";
 import type { DeepSeekClient } from "../src/deepseek/client.js";
 import type {
@@ -123,11 +127,37 @@ test("Agent tool async mode registers task lifecycle and notification", async ()
   );
 
   assert.equal(output.status, "async_launched");
+  assert.deepEqual(state.agentTasks[output.agentId]?.pendingMessages, []);
   await waitFor(() => state.agentTasks[output.agentId]?.status === "completed");
   assert.equal(state.agentTasks[output.agentId]?.result, "async result");
   assert.equal(state.agentNotifications.length, 1);
   assert.equal(state.agentNotifications[0]?.agentTaskId, output.agentId);
   assert.match(state.agentNotifications[0]?.message ?? "", /async child/);
+});
+
+test("Agent task pending messages can be queued and drained", () => {
+  const state = createState();
+  state.agentTasks.agent_test = {
+    id: "agent_test",
+    agentType: "worker",
+    description: "test mailbox",
+    prompt: "wait for messages",
+    mode: "async",
+    status: "running",
+    createdAt: 1,
+    updatedAt: 1,
+    pendingMessages: [],
+  };
+
+  assert.equal(queueAgentMessage(state.agentTasks, "agent_test", "first"), true);
+  assert.equal(queueAgentMessage(state.agentTasks, "missing", "lost"), false);
+  assert.deepEqual(state.agentTasks.agent_test?.pendingMessages, ["first"]);
+
+  assert.deepEqual(drainAgentMessages(state.agentTasks, "agent_test"), ["first"]);
+  assert.deepEqual(drainAgentMessages(state.agentTasks, "agent_test"), []);
+
+  state.agentTasks.agent_test!.status = "completed";
+  assert.equal(queueAgentMessage(state.agentTasks, "agent_test", "late"), false);
 });
 
 test("Agent tool worktree isolation keeps file edits out of the parent cwd", async (t) => {
