@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { loadConfig } from "./config/load-config.js";
 import type { MemoryConfig } from "./Memory/type.js";
 import { query } from "./query.js";
+import { recordTranscriptMessage } from "./transcript/persistence.js";
 import { createMessage } from "./types/messages.js";
 import { createRuntime } from "./types/runtime.js";
 import { createState, type State } from "./types/state.js";
@@ -15,6 +16,9 @@ export async function runCli(args: string[]): Promise<void> {
     cwd: process.cwd(),
     deepSeekRuntimeConfig: loadConfig(),
     MemoryConfig: createCliMemoryConfig(),
+    longTermMemoryConfig: {
+      autoInject: true,
+    },
   });
   const state = createState();
   const firstPrompt = args.join(" ").trim();
@@ -39,7 +43,6 @@ export async function runCli(args: string[]): Promise<void> {
     }
 
     while (!shouldExit) {
-      drainAgentNotifications(state);
       const prompt = (await readline.question("\n> ")).trim();
 
       if (!prompt) {
@@ -62,10 +65,12 @@ async function runUserPrompt(
   runtime: Runtime,
   state: State,
 ): Promise<void> {
-  state.Messages.push(createMessage({
+  const userMessage = createMessage({
     role: "user",
     content: prompt,
-  }));
+  });
+  state.Messages.push(userMessage);
+  await recordTranscriptMessage(runtime, userMessage);
   runtime.toolUseContext.messages = state.Messages;
 
   let assistantHasOutput = false;
@@ -108,13 +113,6 @@ async function runUserPrompt(
     }
   } catch (error) {
     output.write(`\n[error] ${stringifyError(error)}\n`);
-  }
-}
-
-function drainAgentNotifications(state: State): void {
-  while (state.agentNotifications.length > 0) {
-    const notification = state.agentNotifications.shift()!;
-    output.write(`\n${notification.message}\n`);
   }
 }
 

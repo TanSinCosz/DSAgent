@@ -16,6 +16,10 @@ export type AgentTask = {
   createdAt: number;
   updatedAt: number;
   outputFile?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  baseCommit?: string;
+  changedFiles?: string[];
   result?: string;
   error?: string;
 };
@@ -29,6 +33,10 @@ export type AgentNotification = {
   createdAt: number;
   message: string;
   outputFile?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  baseCommit?: string;
+  changedFiles?: string[];
 };
 
 export type AgentTasksState = Record<string, AgentTask>;

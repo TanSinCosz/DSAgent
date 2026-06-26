@@ -4,6 +4,7 @@ import {
   buildSystemPrompt,
   type SystemPromptOptions,
 } from "../system-prompt.js";
+import { createLongTermMemoryContextMessage } from "./long-term-memory.js";
 import type { ToolResultBudgetState } from "../types/context.js";
 import { toDeepSeekMessage } from "../types/messages.js";
 import type { Runtime } from "../types/runtime.js";
@@ -43,13 +44,19 @@ export async function buildMessagesForQuery(
   const promptOptions = options.promptOptions ?? {};
   const applyRequestLimits = options.applyRequestLimits ?? true;
   const systemPrompt = await getOrCreateSystemPrompt(runtime, promptOptions);
+  const projectedMessages = projectMessagesWithAutoCompress(state);
+  const longTermMemoryMessage = await createLongTermMemoryContextMessage(
+    runtime,
+    projectedMessages,
+  );
 
   let messages: DeepSeekMessage[] = [
     {
       role: "system",
       content: systemPrompt,
     },
-    ...projectMessagesWithAutoCompress(state).map(toDeepSeekMessage),
+    ...(longTermMemoryMessage ? [longTermMemoryMessage] : []),
+    ...projectedMessages.map(toDeepSeekMessage),
   ];
 
   if (applyRequestLimits) {

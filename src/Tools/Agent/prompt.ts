@@ -21,5 +21,6 @@ Usage notes:
   - async: launch the agent in the background and return an output file path.
   - fork: inherit the parent conversation context and run the directive in that context.
 - run_in_background is supported as an alias for execution_mode: async.
-- Fork mode should be used when the child needs the parent's context but its detailed tool output should stay out of the parent conversation.`;
+- Fork mode should be used when the child needs the parent's context but its detailed tool output should stay out of the parent conversation.
+- Set isolation: "worktree" when an agent may edit files independently. This runs it in a temporary git worktree. If it makes changes, the worktree path is returned; if it makes no changes, the worktree is cleaned up.`;
 }

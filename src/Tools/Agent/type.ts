@@ -23,6 +23,10 @@ export const inputSchema = () =>
       .enum(["sync", "async", "fork"])
       .optional()
       .describe("How to run the agent. sync waits for completion, async writes output to a file, fork inherits the parent conversation context."),
+    isolation: z
+      .enum(["none", "worktree"])
+      .optional()
+      .describe("Run the agent in the current working tree or in an isolated temporary git worktree."),
   });
 
 export const outputSchema = () =>
@@ -35,6 +39,10 @@ export const outputSchema = () =>
       description: z.string(),
       result: z.string(),
       messageCount: z.number(),
+      worktreePath: z.string().optional(),
+      worktreeBranch: z.string().optional(),
+      baseCommit: z.string().optional(),
+      changedFiles: z.array(z.string()).optional(),
     }),
     z.object({
       status: z.literal("async_launched"),
@@ -44,5 +52,8 @@ export const outputSchema = () =>
       description: z.string(),
       prompt: z.string(),
       outputFile: z.string(),
+      worktreePath: z.string().optional(),
+      worktreeBranch: z.string().optional(),
+      baseCommit: z.string().optional(),
     }),
   ]);

@@ -47,6 +47,10 @@ async function toDeepSeekTools(
 }
 
 function toToolInputParameters(tool: Tool): JSONSchemaObject {
+  if (tool.inputJsonSchema) {
+    return tool.inputJsonSchema;
+  }
+
   const schema =
     typeof tool.inputSchema === "function" ? tool.inputSchema() : tool.inputSchema;
 

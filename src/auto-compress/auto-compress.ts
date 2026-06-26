@@ -8,6 +8,7 @@ import {
   savePersistedSessionMemory,
 } from "../session-memory/persistence.js";
 import { updateSessionMemoryForAutoCompress } from "../session-memory/session-memory.js";
+import { restoreReadFileStateAfterAutoCompress } from "./read-file-restore.js";
 import type {
   AutoCompressState,
   AutoCompressSummary,
@@ -28,8 +29,13 @@ const MIN_RECENT_TEXT_MESSAGES = 5;
 const MIN_RECENT_API_MESSAGES = 12;
 
 export type AutoCompressResult =
-  | { status: "compressed"; summary: AutoCompressSummary }
+  | AutoCompressCompressedResult
   | { status: "skipped"; reason: string };
+
+type AutoCompressCompressedResult = {
+  status: "compressed";
+  summary: AutoCompressSummary;
+};
 
 /**
  * Runs the durable auto-compress step against State.
@@ -48,7 +54,14 @@ export async function applyAutoCompression(
 
   const existingSummary = createSessionMemoryAutoCompressSummary(state);
   if (existingSummary && isSummaryCurrentForLatestMessage(existingSummary, state)) {
-    return activateAutoCompressSummary(autoCompress, existingSummary);
+    const result = activateAutoCompressSummary(autoCompress, existingSummary);
+    await restoreReadFileStateAfterAutoCompress(
+      runtime,
+      state,
+      result.summary.id,
+      projectMessagesWithAutoCompress(state),
+    );
+    return result;
   }
 
   if (!autoCompress.sessionMemoryUpdated) {
@@ -64,12 +77,26 @@ export async function applyAutoCompression(
   const summary = createSessionMemoryAutoCompressSummary(state);
   if (!summary) {
     if (existingSummary) {
-      return activateAutoCompressSummary(autoCompress, existingSummary);
+      const result = activateAutoCompressSummary(autoCompress, existingSummary);
+      await restoreReadFileStateAfterAutoCompress(
+        runtime,
+        state,
+        result.summary.id,
+        projectMessagesWithAutoCompress(state),
+      );
+      return result;
     }
     return { status: "skipped", reason: "session_memory_not_usable" };
   }
 
-  return activateAutoCompressSummary(autoCompress, summary);
+  const result = activateAutoCompressSummary(autoCompress, summary);
+  await restoreReadFileStateAfterAutoCompress(
+    runtime,
+    state,
+    result.summary.id,
+    projectMessagesWithAutoCompress(state),
+  );
+  return result;
 }
 
 export function ensureAutoCompressState(state: State): AutoCompressState {
@@ -96,7 +123,15 @@ export function projectMessagesWithAutoCompress(state: State): Message[] {
     (message) => message.id === summary.throughMessageId,
   );
   if (throughIndex === -1) {
-    return state.Messages;
+    const summaryMessageId = `msg_${summary.id}`;
+    if (state.Messages[0]?.id === summaryMessageId) {
+      return state.Messages;
+    }
+
+    return [
+      createAutoCompressSummaryMessage(summary),
+      ...state.Messages,
+    ];
   }
 
   const tailStart = calculateRecentTailStart(state.Messages, throughIndex);
@@ -198,7 +233,7 @@ function findSummaryByThroughMessageId(
 function activateAutoCompressSummary(
   autoCompress: AutoCompressState,
   summary: AutoCompressSummary,
-): AutoCompressResult {
+): AutoCompressCompressedResult {
   const existing = findSummaryByThroughMessageId(
     autoCompress,
     summary.throughMessageId,

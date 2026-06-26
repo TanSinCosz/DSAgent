@@ -48,6 +48,7 @@ export interface Tool<
     name: string;
     inputSchema: TInputSchema;
     outputSchema: TOutputSchema
+    inputJsonSchema?: JSONSchemaObject;
     maxResultSizeChars?: number;
     searchHint?: string;
     shouldDefer?: boolean;
@@ -167,6 +168,26 @@ export class FileStateCache {
     }
 }
 
+export const READ_FILE_STATE_CACHE_SIZE = 100;
+export const READ_FILE_STATE_CACHE_MAX_SIZE_BYTES = 25 * 1024 * 1024;
+
+export function createFileStateCache(
+    maxEntries = READ_FILE_STATE_CACHE_SIZE,
+    maxSizeBytes = READ_FILE_STATE_CACHE_MAX_SIZE_BYTES,
+): FileStateCache {
+    return new FileStateCache(maxEntries, maxSizeBytes);
+}
+
+export function cloneFileStateCache(cache: FileStateCache): FileStateCache {
+    const cloned = new FileStateCache(cache.max, cache.maxSize);
+    cloned.load(cache.dump());
+    return cloned;
+}
+
+export function cacheToObject(cache: FileStateCache): Record<string, FileState> {
+    return Object.fromEntries(cache.entries());
+}
+
 export type Tools = readonly Tool[]
 
 export type ThinkingConfig =
@@ -202,6 +223,7 @@ export type CreateToolUseContextOptions = {
     mainLoopModel?: string
     agentDefinitions?: AgentDefinitionsResult
     thinkingConfig?: ThinkingConfig
+    readFileState?: FileStateCache
 }
 
 export function createToolUseContext(
@@ -228,7 +250,7 @@ export function createToolUseContext(
         setAppState: update => {
             appState = update(appState)
         },
-        readFileState: new FileStateCache(100, 1024 * 1024),
+        readFileState: options.readFileState ?? createFileStateCache(),
         tokenizer: options.tokenizer,
         messages: options.messages ?? [],
     }

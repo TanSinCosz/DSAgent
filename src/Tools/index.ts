@@ -9,6 +9,7 @@ import { FileRead } from "./FileRead/FileRead.js";
 import { FileWrite } from "./FileWrite/FileWrite.js";
 import { Glob } from "./Glob/Glob.js";
 import { Grep } from "./Grep/Grep.js";
+import { MemorySave } from "./MemorySave/MemorySave.js";
 import type { Tools } from "./types.js";
 
 export type CreateDefaultToolsOptions = {
@@ -28,6 +29,7 @@ export function createDefaultTools(
     new FileEdit(),
     new Glob(),
     new Grep(),
+    new MemorySave(),
   ];
 }
 
@@ -39,6 +41,7 @@ export {
   FileWrite,
   Glob,
   Grep,
+  MemorySave,
 };
 
 export type { Tool, Tools, ToolUseContext } from "./types.js";

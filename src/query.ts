@@ -7,6 +7,10 @@ import { buildMessagesForQuery } from "./query/messages.js";
 import { createStreamRequest } from "./query/request.js";
 import type { MessagesForQuery, QueryEvent, QueryOptions } from "./query/types.js";
 import { applyAutoCompression } from "./auto-compress/index.js";
+import {
+  recordTranscriptMessage,
+  recordTranscriptStateSnapshot,
+} from "./transcript/persistence.js";
 
 export type {
   MessageCompressionContext,
@@ -21,6 +25,33 @@ export { createStreamRequest } from "./query/request.js";
 export { applyAutoCompression } from "./auto-compress/index.js";
 
 const DEFAULT_AUTO_COMPRESS_TRIGGER_TOKENS = 160_000;
+
+export function flushAgentNotificationsToMessages(state: State): number {
+  const notifications = state.agentNotifications.splice(0);
+
+  for (const notification of notifications) {
+    state.Messages.push(createMessage({
+      role: "user",
+      content: notification.message,
+    }));
+  }
+
+  return notifications.length;
+}
+
+export async function flushAgentNotificationsToMessagesAndTranscript(
+  runtime: Runtime,
+  state: State,
+): Promise<number> {
+  const beforeCount = state.Messages.length;
+  const flushed = flushAgentNotificationsToMessages(state);
+
+  for (const message of state.Messages.slice(beforeCount)) {
+    await recordTranscriptMessage(runtime, message);
+  }
+
+  return flushed;
+}
 
 export async function* query(
   runtime: Runtime,
@@ -39,6 +70,10 @@ export async function* _query(
   const client = runtime.deepSeekClient;
 
   for (let turn = 1; turn <= maxTurns; turn++) {
+    if (await flushAgentNotificationsToMessagesAndTranscript(runtime, state) > 0) {
+      runtime.toolUseContext.messages = state.Messages;
+    }
+
     const messagesForQuery = await prepareMessagesForQuery(
       runtime,
       state,
@@ -67,7 +102,9 @@ export async function* _query(
       throw new Error("Model stream completed without an assistant message.");
     }
 
-    state.Messages.push(createMessage(assistantMessage));
+    const persistedAssistantMessage = createMessage(assistantMessage);
+    state.Messages.push(persistedAssistantMessage);
+    await recordTranscriptMessage(runtime, persistedAssistantMessage);
     runtime.toolUseContext.messages = state.Messages;
     yield { type: "assistant_message", message: assistantMessage };
 
@@ -86,7 +123,9 @@ export async function* _query(
         runtime,
         state,
       );
-      state.Messages.push(createMessage(toolResultMessage));
+      const persistedToolResultMessage = createMessage(toolResultMessage);
+      state.Messages.push(persistedToolResultMessage);
+      await recordTranscriptMessage(runtime, persistedToolResultMessage);
       runtime.toolUseContext.messages = state.Messages;
       yield {
         type: "tool_result",
@@ -111,6 +150,7 @@ async function prepareMessagesForQuery(
     if (shouldApplyAutoCompression(messagesForQuery)) {
       const result = await applyAutoCompression(runtime, state);
       if (result.status === "compressed") {
+        await recordTranscriptStateSnapshot(runtime, state, "auto_compress");
         messagesForQuery = await options.messagesForQueryBuilder(runtime, state);
       }
     }
@@ -123,7 +163,10 @@ async function prepareMessagesForQuery(
   });
 
   if (shouldApplyAutoCompression(projectedMessages)) {
-    await applyAutoCompression(runtime, state);
+    const result = await applyAutoCompression(runtime, state);
+    if (result.status === "compressed") {
+      await recordTranscriptStateSnapshot(runtime, state, "auto_compress");
+    }
   }
 
   return buildMessagesForQuery(runtime, state, {

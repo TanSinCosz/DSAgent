@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { query } from "../../query.js";
 import { createMessage, type Message } from "../../types/messages.js";
-import { createRuntime, type Runtime } from "../../types/runtime.js";
+import {
+  createRuntime,
+  type Runtime,
+  type SubAgentId,
+} from "../../types/runtime.js";
 import { createState, type State } from "../../types/state.js";
 import type {
   AppState,
@@ -13,9 +19,13 @@ import type {
   Tool,
   ToolPermissionContext,
 } from "../types.js";
+import { cloneFileStateCache } from "../types.js";
 import type { AgentDefinition } from "./definitions.js";
 
+const execFileAsync = promisify(execFile);
+
 export type AgentExecutionMode = "sync" | "async" | "fork";
+export type AgentIsolationMode = "none" | "worktree";
 
 export type AgentCompletedOutput = {
   status: "completed";
@@ -25,6 +35,10 @@ export type AgentCompletedOutput = {
   description: string;
   result: string;
   messageCount: number;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  baseCommit?: string;
+  changedFiles?: string[];
 };
 
 export type AgentAsyncLaunchedOutput = {
@@ -35,6 +49,9 @@ export type AgentAsyncLaunchedOutput = {
   description: string;
   prompt: string;
   outputFile: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  baseCommit?: string;
 };
 
 export type AgentOutput = AgentCompletedOutput | AgentAsyncLaunchedOutput;
@@ -46,9 +63,25 @@ export type RunAgentOptions = {
   prompt: string;
   description: string;
   mode: AgentExecutionMode;
+  isolation: AgentIsolationMode;
   maxTurns?: number;
-  agentId?: string;
+  agentId?: SubAgentId;
   recordTaskLifecycle?: boolean;
+  worktree?: AgentWorktreeSession;
+};
+
+type AgentWorktreeSession = {
+  worktreePath: string;
+  worktreeBranch: string;
+  baseCommit: string;
+  repoRoot: string;
+};
+
+type FinalizedWorktree = {
+  worktreePath?: string;
+  worktreeBranch?: string;
+  baseCommit?: string;
+  changedFiles?: string[];
 };
 
 export async function runAgentTask(options: RunAgentOptions): Promise<AgentOutput> {
@@ -61,30 +94,34 @@ export async function runAgentTask(options: RunAgentOptions): Promise<AgentOutpu
 
 async function launchAsyncAgent(options: RunAgentOptions): Promise<AgentAsyncLaunchedOutput> {
   const agentId = createAgentId();
+  const worktree = await prepareAgentWorktreeIfNeeded(options, agentId);
   const outputFile = getAgentOutputFile(agentId);
 
-  registerAgentTask(options, agentId, "async", outputFile);
+  registerAgentTask(options, agentId, "async", outputFile, worktree);
 
   void runAgentSynchronously({
     ...options,
     mode: "sync",
     agentId,
+    worktree,
     recordTaskLifecycle: false,
   })
     .then(async (result) => {
       await writeAgentOutput(outputFile, result);
-      completeAgentTask(options, agentId, result.result, outputFile);
+      completeAgentTask(options, agentId, result.result, outputFile, result);
     })
     .catch(async (error) => {
       const message = stringifyError(error);
+      const finalizedWorktree = await preserveAgentWorktreeAfterFailure(worktree);
       await writeAgentOutput(outputFile, {
         status: "failed",
         agentId,
         agentType: options.agentDefinition.agentType,
         description: options.description,
         error: message,
+        ...finalizedWorktree,
       });
-      failAgentTask(options, agentId, message, outputFile);
+      failAgentTask(options, agentId, message, outputFile, finalizedWorktree);
     });
 
   return {
@@ -95,6 +132,7 @@ async function launchAsyncAgent(options: RunAgentOptions): Promise<AgentAsyncLau
     description: options.description,
     prompt: options.prompt,
     outputFile,
+    ...worktreeToOutput(worktree),
   };
 }
 
@@ -102,16 +140,24 @@ async function runAgentSynchronously(
   options: RunAgentOptions,
 ): Promise<AgentCompletedOutput> {
   const agentId = options.agentId ?? createAgentId();
+  const worktree = options.worktree ??
+    await prepareAgentWorktreeIfNeeded(options, agentId);
   const shouldRecordLifecycle = options.recordTaskLifecycle ?? true;
 
   if (shouldRecordLifecycle) {
-    registerAgentTask(options, agentId, options.mode);
+    registerAgentTask(options, agentId, options.mode, undefined, worktree);
   }
 
-  const childState = createChildAgentState(options);
-  const childRuntime = createChildAgentRuntime(options, childState);
+  const childState = createChildAgentState(options, worktree);
+  const childRuntime = createChildAgentRuntime(
+    options,
+    childState,
+    agentId,
+    worktree,
+  );
 
   let result = "";
+  let finalizedWorktree: FinalizedWorktree = worktreeToOutput(worktree);
 
   try {
     for await (const event of query(childRuntime, childState, {
@@ -130,8 +176,10 @@ async function runAgentSynchronously(
       }
     }
 
+    finalizedWorktree = await finalizeAgentWorktree(worktree);
+
     if (shouldRecordLifecycle) {
-      completeAgentTask(options, agentId, result);
+      completeAgentTask(options, agentId, result, undefined, finalizedWorktree);
     }
 
     return {
@@ -142,17 +190,33 @@ async function runAgentSynchronously(
       description: options.description,
       result,
       messageCount: childState.Messages.length,
+      ...finalizedWorktree,
     };
   } catch (error) {
+    finalizedWorktree = await preserveAgentWorktreeAfterFailure(worktree);
+
     if (shouldRecordLifecycle) {
-      failAgentTask(options, agentId, stringifyError(error));
+      failAgentTask(
+        options,
+        agentId,
+        stringifyError(error),
+        undefined,
+        finalizedWorktree,
+      );
     }
 
     throw error;
   }
 }
 
-function buildInitialMessages(options: RunAgentOptions): Message[] {
+function buildInitialMessages(
+  options: RunAgentOptions,
+  worktree: AgentWorktreeSession | undefined,
+): Message[] {
+  const worktreeNotice = worktree
+    ? `${buildWorktreeNotice(options.parentRuntime.cwd, worktree.worktreePath)}\n\n`
+    : "";
+
   if (options.mode === "fork") {
     return [
       ...options.parentRuntime.toolUseContext.messages.map((message) => ({
@@ -160,7 +224,7 @@ function buildInitialMessages(options: RunAgentOptions): Message[] {
       })),
       createMessage({
         role: "user",
-        content: buildForkDirective(options.prompt),
+        content: `${worktreeNotice}${buildForkDirective(options.prompt)}`,
       }),
     ];
   }
@@ -168,14 +232,17 @@ function buildInitialMessages(options: RunAgentOptions): Message[] {
   return [
     createMessage({
       role: "user",
-      content: options.prompt,
+      content: `${worktreeNotice}${options.prompt}`,
     }),
   ];
 }
 
-function createChildAgentState(options: RunAgentOptions): State {
+function createChildAgentState(
+  options: RunAgentOptions,
+  worktree: AgentWorktreeSession | undefined,
+): State {
   return createState({
-    messages: buildInitialMessages(options),
+    messages: buildInitialMessages(options, worktree),
     mode: options.agentDefinition.permissionMode === "plan" ? "plan" : "default",
   });
 }
@@ -183,6 +250,8 @@ function createChildAgentState(options: RunAgentOptions): State {
 function createChildAgentRuntime(
   options: RunAgentOptions,
   childState: State,
+  agentId: SubAgentId,
+  worktree: AgentWorktreeSession | undefined,
 ): Runtime {
   const parent = options.parentRuntime;
   const childTools = options.mode === "fork"
@@ -191,8 +260,11 @@ function createChildAgentRuntime(
 
   return createRuntime({
     sessionId: parent.sessionId,
-    agentId: "sub",
-    cwd: parent.cwd,
+    agentId,
+    agentRole: "subagent",
+    parentAgentId: parent.agentId,
+    agentType: options.agentDefinition.agentType,
+    cwd: worktree?.worktreePath ?? parent.cwd,
     deepSeekRuntimeConfig: {
       ...parent.deepSeekRuntimeConfig,
       model: resolveAgentModel(
@@ -204,6 +276,11 @@ function createChildAgentRuntime(
     contextProjectionState: parent.contextProjectionState,
     toolResultBudgetState: parent.toolResultBudgetState,
     MemoryConfig: parent.MemoryConfig,
+    longTermMemory: parent.longTermMemory,
+    longTermMemoryConfig: {
+      ...parent.longTermMemoryConfig,
+      agentId,
+    },
     tools: childTools,
     messages: childState.Messages,
     tokenizer: parent.toolUseContext.tokenizer,
@@ -213,6 +290,9 @@ function createChildAgentRuntime(
     thinkingConfig: parent.toolUseContext.options.thinkingConfig,
     appState: deriveChildAppState(options),
     systemPrompt: options.mode === "fork" ? parent.systemPrompt : undefined,
+    readFileState: options.mode === "fork" && !worktree
+      ? cloneFileStateCache(parent.toolUseContext.readFileState)
+      : undefined,
   });
 }
 
@@ -318,7 +398,17 @@ Issues: <only if there are issues to flag>
 Directive: ${prompt}`;
 }
 
-function createAgentId(): string {
+function buildWorktreeNotice(parentCwd: string, worktreeCwd: string): string {
+  return `<worktree_isolation>
+You are operating in an isolated git worktree.
+Parent cwd: ${parentCwd}
+Your cwd: ${worktreeCwd}
+
+Paths from inherited context may refer to the parent cwd. Translate them to your worktree before editing. Re-read files in your worktree before modifying them. Your changes stay in this worktree and do not modify the parent's working copy.
+</worktree_isolation>`;
+}
+
+function createAgentId(): SubAgentId {
   return `agent_${randomUUID()}`;
 }
 
@@ -327,6 +417,7 @@ function registerAgentTask(
   agentId: string,
   mode: AgentExecutionMode,
   outputFile?: string,
+  worktree?: AgentWorktreeSession,
 ): void {
   const now = Date.now();
 
@@ -340,6 +431,7 @@ function registerAgentTask(
     createdAt: now,
     updatedAt: now,
     outputFile,
+    ...worktreeToOutput(worktree),
   };
 }
 
@@ -348,6 +440,7 @@ function completeAgentTask(
   agentId: string,
   result: string,
   outputFile?: string,
+  worktree?: FinalizedWorktree,
 ): void {
   const now = Date.now();
   const existing = options.parentState.agentTasks[agentId];
@@ -358,10 +451,11 @@ function completeAgentTask(
     updatedAt: now,
     result,
     outputFile: outputFile ?? existing?.outputFile,
+    ...worktree,
   };
 
-  if (outputFile) {
-    enqueueAgentNotification(options, agentId, "completed", outputFile);
+  if (outputFile || worktree?.worktreePath) {
+    enqueueAgentNotification(options, agentId, "completed", outputFile, worktree);
   }
 }
 
@@ -370,6 +464,7 @@ function failAgentTask(
   agentId: string,
   error: string,
   outputFile?: string,
+  worktree?: FinalizedWorktree,
 ): void {
   const now = Date.now();
   const existing = options.parentState.agentTasks[agentId];
@@ -380,10 +475,11 @@ function failAgentTask(
     updatedAt: now,
     error,
     outputFile: outputFile ?? existing?.outputFile,
+    ...worktree,
   };
 
-  if (outputFile) {
-    enqueueAgentNotification(options, agentId, "failed", outputFile);
+  if (outputFile || worktree?.worktreePath) {
+    enqueueAgentNotification(options, agentId, "failed", outputFile, worktree);
   }
 }
 
@@ -412,6 +508,7 @@ function enqueueAgentNotification(
   agentId: string,
   status: "completed" | "failed",
   outputFile?: string,
+  worktree?: FinalizedWorktree,
 ): void {
   options.parentState.agentNotifications.push({
     id: `agent_notification_${randomUUID()}`,
@@ -420,8 +517,15 @@ function enqueueAgentNotification(
     description: options.description,
     status,
     createdAt: Date.now(),
-    message: buildAgentNotificationMessage(options, agentId, status, outputFile),
+    message: buildAgentNotificationMessage(
+      options,
+      agentId,
+      status,
+      outputFile,
+      worktree,
+    ),
     outputFile,
+    ...worktree,
   });
 }
 
@@ -430,6 +534,7 @@ function buildAgentNotificationMessage(
   agentId: string,
   status: "completed" | "failed",
   outputFile?: string,
+  worktree?: FinalizedWorktree,
 ): string {
   const lines = [
     `<task-notification>`,
@@ -442,9 +547,138 @@ function buildAgentNotificationMessage(
     lines.push(`output_file: ${outputFile}`);
   }
 
+  if (worktree?.worktreePath) {
+    lines.push(`worktree_path: ${worktree.worktreePath}`);
+  }
+
+  if (worktree?.worktreeBranch) {
+    lines.push(`worktree_branch: ${worktree.worktreeBranch}`);
+  }
+
+  if (worktree?.changedFiles?.length) {
+    lines.push(`changed_files: ${worktree.changedFiles.join(", ")}`);
+  }
+
   lines.push(`</task-notification>`);
 
   return lines.join("\n");
+}
+
+async function prepareAgentWorktreeIfNeeded(
+  options: RunAgentOptions,
+  agentId: SubAgentId,
+): Promise<AgentWorktreeSession | undefined> {
+  if (options.isolation !== "worktree") {
+    return undefined;
+  }
+
+  const repoRoot = await getGitRepoRoot(options.parentRuntime.cwd);
+  const baseCommit = await git(["rev-parse", "HEAD"], repoRoot);
+  const slug = sanitizeWorktreeSlug(`${agentId}-${options.agentDefinition.agentType}`);
+  const worktreeBranch = `opencat-agent-${slug}`;
+  const worktreePath = path.join(tmpdir(), "opencat-agent-worktrees", slug);
+
+  await mkdir(path.dirname(worktreePath), { recursive: true });
+  await git(["worktree", "add", "-b", worktreeBranch, worktreePath, baseCommit], repoRoot);
+
+  return {
+    worktreePath,
+    worktreeBranch,
+    baseCommit,
+    repoRoot,
+  };
+}
+
+async function finalizeAgentWorktree(
+  worktree: AgentWorktreeSession | undefined,
+): Promise<FinalizedWorktree> {
+  if (!worktree) {
+    return {};
+  }
+
+  const changedFiles = await getChangedFiles(worktree.worktreePath);
+  if (changedFiles.length === 0) {
+    await cleanupAgentWorktree(worktree);
+    return {
+      worktreePath: undefined,
+      worktreeBranch: undefined,
+      baseCommit: undefined,
+      changedFiles: undefined,
+    };
+  }
+
+  return {
+    ...worktreeToOutput(worktree),
+    changedFiles,
+  };
+}
+
+async function preserveAgentWorktreeAfterFailure(
+  worktree: AgentWorktreeSession | undefined,
+): Promise<FinalizedWorktree> {
+  if (!worktree) {
+    return {};
+  }
+
+  return {
+    ...worktreeToOutput(worktree),
+    changedFiles: await getChangedFiles(worktree.worktreePath),
+  };
+}
+
+function worktreeToOutput(
+  worktree: AgentWorktreeSession | undefined,
+): FinalizedWorktree {
+  if (!worktree) {
+    return {};
+  }
+
+  return {
+    worktreePath: worktree.worktreePath,
+    worktreeBranch: worktree.worktreeBranch,
+    baseCommit: worktree.baseCommit,
+  };
+}
+
+async function getGitRepoRoot(cwd: string): Promise<string> {
+  try {
+    return await git(["rev-parse", "--show-toplevel"], cwd);
+  } catch {
+    throw new Error("Agent worktree isolation requires running inside a git repository.");
+  }
+}
+
+async function getChangedFiles(cwd: string): Promise<string[]> {
+  const status = await git(["status", "--short"], cwd);
+  return status
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean);
+}
+
+async function cleanupAgentWorktree(worktree: AgentWorktreeSession): Promise<void> {
+  await git([
+    "worktree",
+    "remove",
+    "--force",
+    worktree.worktreePath,
+  ], worktree.repoRoot);
+  await git(["branch", "-D", worktree.worktreeBranch], worktree.repoRoot);
+}
+
+async function git(args: string[], cwd: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    windowsHide: true,
+  });
+
+  return stdout.trim();
+}
+
+function sanitizeWorktreeSlug(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
 function getAgentOutputFile(agentId: string): string {

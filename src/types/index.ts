@@ -38,6 +38,20 @@ export {
   type Runtime,
 } from "./runtime.js";
 export {
+  createTranscriptStore,
+  loadStateFromTranscript,
+  loadTranscriptEntries,
+  recordTranscriptMessage,
+  recordTranscriptStateSnapshot,
+  type CreateTranscriptStoreOptions,
+  type PersistedStateSnapshot,
+  type TranscriptEntry,
+  type TranscriptMessageEntry,
+  type TranscriptSnapshotReason,
+  type TranscriptStateSnapshotEntry,
+  type TranscriptStore,
+} from "../transcript/persistence.js";
+export {
   createSessionMemoryState,
   DEFAULT_SESSION_MEMORY_CONFIG,
   type SessionMemoryConfig,

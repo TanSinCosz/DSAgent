@@ -13,7 +13,7 @@ import { lemmatizeForBm25CN } from "./utils/lemmatizeCN.js";
 import { lemmatizeForBm25 } from "./utils/lemmatizeEng.js";
 import { ADDITIVE_EXTRACTION_PROMPT, AGENT_CONTEXT_SUFFIX } from "./prompt.js";
 import { generateAdditiveExtractionPrompt } from "./utils/prompt.js";
-import { extractEntitiesBatch } from "./utils/entity_extraction.js";
+import { extractEntities, extractEntitiesBatch } from "./utils/entity_extraction.js";
 import { OpenAIStructuredLLM } from "./LLM/LLM.js";
 import { SearchMemoryOptions } from "./type.js";
 import { scoreAndRank, getBm25Params, ENTITY_BOOST_WEIGHT } from "./utils/scoring.js";

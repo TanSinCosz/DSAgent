@@ -89,6 +89,7 @@ export class Agent implements Tool<AgentInput, AgentToolOutput, typeof inputSche
       prompt: input.prompt,
       description: input.description,
       mode,
+      isolation: input.isolation ?? "none",
     });
   }
 

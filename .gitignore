@@ -1,5 +1,4 @@
 
-src/src/
 # Dependencies
 node_modules/
 
@@ -30,6 +29,7 @@ pnpm-debug.log*
 *.sqlite
 *.sqlite3
 .mem0/
+.opencat/
 
 # Cache and temporary files
 .cache/
@@ -38,9 +38,23 @@ tmp/
 temp/
 coverage/
 
+# Local reference/runtime folders
+src/src/
+.claude/
+.skill/
+
+# Local Python artifacts
+/system_prompt.py
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
 # Editor and OS files
 .DS_Store
+__MACOSX/
 Thumbs.db
+.idea/
 .vscode/
 !.vscode/extensions.json
 !.vscode/settings.json
