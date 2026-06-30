@@ -29,7 +29,10 @@ import type {
 import { cloneFileStateCache } from "../types.js";
 import type { AgentDefinition } from "./definitions.js";
 import { drainAgentMessages } from "./state.js";
-import { resolveAgentTools } from "./tool-policy.js";
+import {
+  resolveAgentTools,
+  type ResolvedAgentTools,
+} from "./tool-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -160,12 +163,29 @@ async function runAgentSynchronously(
     registerAgentTask(options, agentId, options.mode, undefined, worktree);
   }
 
-  const childState = createChildAgentState(options, worktree);
+  const resolvedAgentTools = resolveAgentTools(
+    options.agentDefinition,
+    options.parentRuntime.tools,
+    {
+      isAsync: options.mode === "async",
+      isFork: options.mode === "fork",
+    },
+  );
+  const agentToolPolicyPrompt = renderAgentToolPolicyPrompt(
+    options,
+    resolvedAgentTools,
+  );
+  const childState = createChildAgentState(
+    options,
+    worktree,
+    agentToolPolicyPrompt,
+  );
   const childRuntime = createChildAgentRuntime(
     options,
     childState,
     agentId,
     worktree,
+    resolvedAgentTools,
   );
 
   let result = "";
@@ -187,7 +207,10 @@ async function runAgentSynchronously(
             : {
               outputStyle: {
                 name: `${options.agentDefinition.agentType} agent`,
-                prompt: options.agentDefinition.getSystemPrompt(),
+                prompt: [
+                  options.agentDefinition.getSystemPrompt(),
+                  agentToolPolicyPrompt,
+                ].join("\n\n"),
               },
             },
         });
@@ -234,6 +257,7 @@ async function runAgentSynchronously(
 function buildInitialMessages(
   options: RunAgentOptions,
   worktree: AgentWorktreeSession | undefined,
+  agentToolPolicyPrompt: string,
 ): Message[] {
   const worktreeNotice = worktree
     ? `${buildWorktreeNotice(options.parentRuntime.cwd, worktree.worktreePath)}\n\n`
@@ -246,7 +270,8 @@ function buildInitialMessages(
       })),
       createMessage({
         role: "user",
-        content: `${worktreeNotice}${buildForkDirective(options.prompt)}`,
+        content:
+          `${worktreeNotice}${buildForkDirective(options.prompt, agentToolPolicyPrompt)}`,
       }, { source: "agent_message" }),
     ];
   }
@@ -262,8 +287,9 @@ function buildInitialMessages(
 function createChildAgentState(
   options: RunAgentOptions,
   worktree: AgentWorktreeSession | undefined,
+  agentToolPolicyPrompt: string,
 ): State {
-  const messages = buildInitialMessages(options, worktree);
+  const messages = buildInitialMessages(options, worktree, agentToolPolicyPrompt);
 
   if (options.mode === "fork") {
     return createState({
@@ -306,16 +332,10 @@ function createChildAgentRuntime(
   childState: State,
   agentId: SubAgentId,
   worktree: AgentWorktreeSession | undefined,
+  resolvedAgentTools: ResolvedAgentTools,
 ): Runtime {
   const parent = options.parentRuntime;
-  const childTools = resolveAgentTools(
-    options.agentDefinition,
-    parent.tools,
-    {
-      isAsync: options.mode === "async",
-      isFork: options.mode === "fork",
-    },
-  ).resolvedTools;
+  const childTools = resolvedAgentTools.resolvedTools;
 
   return createRuntime({
     sessionId: parent.sessionId,
@@ -458,7 +478,7 @@ function resolveAgentModel(
   return agentModel;
 }
 
-function buildForkDirective(prompt: string): string {
+function buildForkDirective(prompt: string, agentToolPolicyPrompt: string): string {
   return `<fork_worker>
 STOP. READ THIS FIRST.
 
@@ -471,6 +491,12 @@ Rules:
 4. Stay strictly within the directive's scope.
 5. Keep your final report concise and factual.
 
+The inherited parent system prompt may mention parent-agent tools. That parent
+tool list does not apply to this fork. The tool policy below is the authoritative
+list for this child agent:
+
+${agentToolPolicyPrompt}
+
 Output format:
 Scope: <the scope you handled>
 Result: <answer or key findings>
@@ -480,6 +506,48 @@ Issues: <only if there are issues to flag>
 </fork_worker>
 
 Directive: ${prompt}`;
+}
+
+function renderAgentToolPolicyPrompt(
+  options: RunAgentOptions,
+  resolvedAgentTools: ResolvedAgentTools,
+): string {
+  const availableTools = resolvedAgentTools.resolvedTools
+    .map((tool) => tool.name)
+    .join(", ") || "(none)";
+  const unavailableTools = uniqueStrings(resolvedAgentTools.unavailableTools)
+    .join(", ") || "(none)";
+  const lines = [
+    "<agent_tool_policy>",
+    `Agent type: ${options.agentDefinition.agentType}`,
+    `Execution mode: ${options.mode}`,
+    `Available tools: ${availableTools}`,
+    `Unavailable tools: ${unavailableTools}`,
+    "Use only the tools listed as available. Do not attempt to call unavailable tools.",
+    "If an unavailable tool would be needed, report the blocker to the parent agent instead of trying to work around the policy.",
+  ];
+
+  if (options.agentDefinition.category === "explore" ||
+    options.agentDefinition.category === "plan") {
+    lines.push(
+      "This is a read-only agent. Do not create, edit, delete, move, copy, or install anything.",
+    );
+  } else if (options.agentDefinition.category === "verify") {
+    lines.push(
+      "This is a verification-only agent. You may run existing checks and read-only inspection commands, but must not edit project files.",
+    );
+  } else {
+    lines.push(
+      "Do not spawn nested agents. The Agent tool is unavailable to child agents.",
+    );
+  }
+
+  lines.push("</agent_tool_policy>");
+  return lines.join("\n");
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 function buildWorktreeNotice(parentCwd: string, worktreeCwd: string): string {

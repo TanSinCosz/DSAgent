@@ -11,6 +11,7 @@ import { Glob } from "./Glob/Glob.js";
 import { Grep } from "./Grep/Grep.js";
 import { MemorySave } from "./MemorySave/MemorySave.js";
 import { SendMessage } from "./SendMessage/SendMessage.js";
+import { WebFetch } from "./WebFetch/WebFetch.js";
 import { WebSearch } from "./WebSearch/WebSearch.js";
 import type { Tools } from "./types.js";
 
@@ -32,6 +33,7 @@ export function createDefaultTools(
     new Glob(),
     new Grep(),
     new WebSearch(),
+    new WebFetch(),
     new MemorySave(),
     new SendMessage(),
   ];
@@ -47,6 +49,7 @@ export {
   Grep,
   MemorySave,
   SendMessage,
+  WebFetch,
   WebSearch,
 };
 

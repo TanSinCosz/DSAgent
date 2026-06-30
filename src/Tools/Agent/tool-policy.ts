@@ -5,6 +5,7 @@ export type ResolvedAgentTools = {
   hasWildcard: boolean;
   validTools: string[];
   invalidTools: string[];
+  unavailableTools: string[];
   resolvedTools: Tools;
 };
 
@@ -13,6 +14,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
   "Glob",
   "Grep",
   "WebSearch",
+  "WebFetch",
 ]);
 
 const VERIFY_TOOL_NAMES = new Set([
@@ -92,15 +94,6 @@ export function resolveAgentTools(
   availableTools: readonly Tool[],
   options: { isAsync?: boolean; isFork?: boolean } = {},
 ): ResolvedAgentTools {
-  if (options.isFork) {
-    return {
-      hasWildcard: true,
-      validTools: [],
-      invalidTools: [],
-      resolvedTools: availableTools,
-    };
-  }
-
   const isAsync = options.isAsync ?? false;
   const filteredAvailableTools = availableTools.filter((tool) =>
     isToolAllowedByDefault(tool, agentDefinition, isAsync),
@@ -114,6 +107,9 @@ export function resolveAgentTools(
   const allowedAvailableTools = filteredAvailableTools.filter(
     (tool) => !denied.has(tool.name),
   );
+  const allowedToolNames = new Set(
+    allowedAvailableTools.map((tool) => tool.name),
+  );
 
   const toolSpecs = agentDefinition.tools;
   const hasWildcard =
@@ -126,6 +122,10 @@ export function resolveAgentTools(
       hasWildcard: true,
       validTools: [],
       invalidTools: [],
+      unavailableTools: collectUnavailableToolNames(
+        availableTools,
+        allowedToolNames,
+      ),
       resolvedTools: allowedAvailableTools,
     };
   }
@@ -149,11 +149,25 @@ export function resolveAgentTools(
       seen.add(tool.name);
     }
   }
+  const resolvedToolNames = new Set(resolvedTools.map((tool) => tool.name));
 
   return {
     hasWildcard: false,
     validTools,
     invalidTools,
+    unavailableTools: [
+      ...collectUnavailableToolNames(availableTools, resolvedToolNames),
+      ...invalidTools,
+    ],
     resolvedTools,
   };
+}
+
+function collectUnavailableToolNames(
+  availableTools: readonly Tool[],
+  allowedToolNames: ReadonlySet<string>,
+): string[] {
+  return availableTools
+    .map((tool) => tool.name)
+    .filter((name) => !allowedToolNames.has(name));
 }

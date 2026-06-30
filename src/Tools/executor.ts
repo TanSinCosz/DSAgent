@@ -14,7 +14,7 @@ export async function executeToolCall(
   if (!tool) {
     return createToolResultMessage(
       toolCall.id,
-      `Tool not found: ${toolCall.function.name}`,
+      renderUnavailableToolMessage(toolCall.function.name, tools, runtime),
     );
   }
 
@@ -33,7 +33,10 @@ export async function executeToolCall(
       state,
     );
     if (permittedInput.ok === false) {
-      return createToolResultMessage(toolCall.id, permittedInput.error);
+      return createToolResultMessage(
+        toolCall.id,
+        `Permission denied for tool ${tool.name}: ${permittedInput.error}`,
+      );
     }
 
     const output = await tool.call(
@@ -79,6 +82,24 @@ async function applyToolPermission(
 
 function findTool(tools: Tools, name: string): Tool | undefined {
   return tools.find((tool) => tool.name === name);
+}
+
+function renderUnavailableToolMessage(
+  toolName: string,
+  tools: Tools,
+  runtime: Runtime,
+): string {
+  const availableTools = tools.map((tool) => tool.name).join(", ") || "(none)";
+  const agentLabel = runtime.agentType
+    ? `${runtime.agentRole}:${runtime.agentType}`
+    : runtime.agentRole;
+
+  return [
+    `Tool unavailable: ${toolName}`,
+    `The current agent/runtime (${agentLabel}) does not have permission to use this tool, or the tool is not loaded for this agent.`,
+    `Available tools for this agent: ${availableTools}.`,
+    "Choose an available tool or report the blocker to the parent agent/user.",
+  ].join("\n");
 }
 
 function parseToolArguments(raw: string): unknown {

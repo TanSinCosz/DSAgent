@@ -72,6 +72,15 @@ test("query auto-compresses oversized projections with session memory before mod
 
   assert.equal(createRequests.length, 0);
   assert.equal(streamRequests.length, 3);
+  assert.deepEqual(getRequestToolNames(streamRequests[0]), ["Edit"]);
+  assert.match(
+    JSON.stringify(streamRequests[0]!.messages),
+    /Available tools: Edit/,
+  );
+  assert.match(
+    JSON.stringify(streamRequests[0]!.messages),
+    /Unavailable tools: .*Agent/,
+  );
   assert.equal(state.sessionMemory.status, "ready");
   assert.equal(state.autoCompress.summaries.length, 1);
   assert.ok(state.autoCompress.summaries.at(-1));
@@ -440,6 +449,11 @@ function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
       ],
     },
   };
+}
+
+function getRequestToolNames(request: DeepSeekStreamRequest | undefined): string[] {
+  assert.ok(request);
+  return (request.tools ?? []).map((tool) => tool.function.name);
 }
 
 function createMemoryConfig() {

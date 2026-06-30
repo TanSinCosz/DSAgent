@@ -188,7 +188,10 @@ test("Agent tool fork request preserves parent prompt prefix for cache reuse", a
 
   const childRequest = harness.streamRequests[0];
   assert.ok(childRequest);
-  assert.deepEqual(childRequest.tools, parentRequest.tools);
+  assert.deepEqual(
+    getRequestToolNames(childRequest),
+    getRequestToolNames(parentRequest).filter((toolName) => toolName !== "Agent"),
+  );
   assert.deepEqual(
     childRequest.messages.slice(0, parentRequest.messages.length),
     parentRequest.messages,
@@ -196,6 +199,14 @@ test("Agent tool fork request preserves parent prompt prefix for cache reuse", a
   assert.match(
     childRequest.messages[parentRequest.messages.length]?.content ?? "",
     /<fork_worker>/,
+  );
+  assert.match(
+    childRequest.messages[parentRequest.messages.length]?.content ?? "",
+    /Unavailable tools: .*Agent/,
+  );
+  assert.match(
+    childRequest.messages[parentRequest.messages.length]?.content ?? "",
+    /parent-agent tools/,
   );
 });
 
@@ -247,8 +258,15 @@ test("read-only agents only receive read tools", async () => {
   assert.equal(output.status, "completed");
   assert.deepEqual(
     getRequestToolNames(streamRequests[0]),
-    ["Read", "Glob", "Grep", "WebSearch"],
+    ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
   );
+  const systemPrompt = streamRequests[0]?.messages[0]?.content ?? "";
+  assert.match(systemPrompt, /<agent_tool_policy>/);
+  assert.match(systemPrompt, /Available tools: Read, Glob, Grep, WebSearch, WebFetch/);
+  assert.match(systemPrompt, /Unavailable tools: .*Agent/);
+  assert.match(systemPrompt, /Unavailable tools: .*Edit/);
+  assert.match(systemPrompt, /Unavailable tools: .*Write/);
+  assert.match(systemPrompt, /read-only agent/);
 });
 
 test("verification agents receive Bash for checks but not editing tools", async () => {
@@ -272,8 +290,15 @@ test("verification agents receive Bash for checks but not editing tools", async 
   assert.equal(output.status, "completed");
   assert.deepEqual(
     getRequestToolNames(streamRequests[0]),
-    ["Bash", "Read", "Glob", "Grep", "WebSearch"],
+    ["Bash", "Read", "Glob", "Grep", "WebSearch", "WebFetch"],
   );
+  const systemPrompt = streamRequests[0]?.messages[0]?.content ?? "";
+  assert.match(systemPrompt, /<agent_tool_policy>/);
+  assert.match(systemPrompt, /Available tools: Bash, Read, Glob, Grep, WebSearch, WebFetch/);
+  assert.match(systemPrompt, /Unavailable tools: .*Agent/);
+  assert.match(systemPrompt, /Unavailable tools: .*Edit/);
+  assert.match(systemPrompt, /Unavailable tools: .*Write/);
+  assert.match(systemPrompt, /verification-only agent/);
 });
 
 test("worker agents receive editing tools but not recursive Agent tool", async () => {
@@ -301,6 +326,10 @@ test("worker agents receive editing tools but not recursive Agent tool", async (
   assert.ok(toolNames.includes("Write"));
   assert.ok(toolNames.includes("Bash"));
   assert.ok(!toolNames.includes("Agent"));
+  const systemPrompt = streamRequests[0]?.messages[0]?.content ?? "";
+  assert.match(systemPrompt, /<agent_tool_policy>/);
+  assert.match(systemPrompt, /Unavailable tools: .*Agent/);
+  assert.match(systemPrompt, /Do not spawn nested agents/);
 });
 
 test("Agent task pending messages can be queued and drained", () => {
