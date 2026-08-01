@@ -14,6 +14,7 @@ export async function createStreamRequest(
 ): Promise<DeepSeekStreamRequest> {
   return {
     model: runtime.deepSeekRuntimeConfig.model as DeepSeekCreateRequest["model"],
+    user_id: runtime.deepSeekRuntimeConfig.userId,
     messages,
     signal: runtime.toolUseContext.abortController.signal,
     max_tokens: runtime.deepSeekRuntimeConfig.maxTokens,

@@ -18,6 +18,7 @@ type JsonRecord = Record<string, unknown>;
 type RunListItem = {
   name: string;
   path: string;
+  evalRoot: string;
   updatedAt: string;
   version: string;
   summary?: JsonRecord;
@@ -108,14 +109,26 @@ type ConversationMessage = {
 const workspaceRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const evalRoot = path.resolve(
   process.env.OPENCAT_SWE_EVAL_DIR?.trim() ||
+    getCliArgument("--dataset") ||
     path.join(workspaceRoot, ".opencat/evals/swe-verified-cache"),
 );
+const evalRootIsExplicit = Boolean(
+  process.env.OPENCAT_SWE_EVAL_DIR?.trim() || getCliArgument("--dataset"),
+);
+const evalRoots = evalRootIsExplicit
+  ? [evalRoot]
+  : [
+    evalRoot,
+    path.join(workspaceRoot, ".opencat/evals/swe-lite"),
+    path.join(workspaceRoot, ".opencat/evals/swe-lite-baseline"),
+  ];
 const DATASET_ONLY_RUN_NAME = "__dataset__";
 const webChatUrl = (process.env.OPENCAT_WEB_URL?.trim() || "http://localhost:5177")
   .replace(/\/+$/, "");
 const port = readPort();
 const MAX_PATCH_BYTES = 50 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
+const datasetPreparation = new Map<string, Promise<void>>();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -156,21 +169,28 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/prepare-repo") {
       const body = await readJsonBody(request);
       const instanceId = stringValue(body.instanceId) ?? "";
-      const instance = await findDatasetInstance(instanceId);
+      const instance = await findDatasetInstance(
+        instanceId,
+        stringValue(body.datasetDir),
+      );
       if (!instance) {
         sendJson(response, { error: "SWE item not found." }, 404);
         return;
       }
 
-      sendJson(response, await prepareRepoWorkspace(instance));
+      const datasetDir = stringValue(body.datasetDir);
+      sendJson(response, await prepareRepoWorkspace(instance, datasetDir));
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/prepare-all-repos") {
-      const records = await loadDashboardDatasetRecords();
+      const records = await loadDashboardDatasetRecords(
+        url.searchParams.get("datasetDir") ?? undefined,
+      );
       const results = [];
+      const datasetDir = url.searchParams.get("datasetDir") ?? undefined;
       for (const record of records) {
-        results.push(await prepareRepoWorkspace(record));
+        results.push(await prepareRepoWorkspace(record, datasetDir));
       }
       sendJson(response, { results });
       return;
@@ -178,13 +198,19 @@ const server = http.createServer(async (request, response) => {
 
     if (url.pathname === "/api/patch") {
       const instanceId = url.searchParams.get("instanceId") ?? "";
-      const instance = await findDatasetInstance(instanceId);
+      const instance = await findDatasetInstance(
+        instanceId,
+        url.searchParams.get("datasetDir") ?? undefined,
+      );
       if (!instance) {
         sendJson(response, { ok: false, error: "SWE item not found." }, 404);
         return;
       }
 
-      sendJson(response, await exportRepoPatch(instance));
+      sendJson(response, await exportRepoPatch(
+        instance,
+        url.searchParams.get("datasetDir") ?? undefined,
+      ));
       return;
     }
 
@@ -197,31 +223,152 @@ const server = http.createServer(async (request, response) => {
 listenOnAvailablePort(server, port);
 
 async function listRuns(): Promise<RunListItem[]> {
-  const entries = await readdir(evalRoot, { withFileTypes: true }).catch(() => []);
-  const runs = await Promise.all(entries
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith("swe_verified_cache_"))
-    .map(async (entry) => {
-      const runPath = path.join(evalRoot, entry.name);
-      const info = await stat(runPath);
-      const summary = await readJson(path.join(runPath, "summary.json"));
-      const config = await readJson(path.join(runPath, "config.json")) ??
-        await readJson(path.join(evalRoot, "config.json"));
-      return {
-        name: entry.name,
-        path: runPath,
-        updatedAt: info.mtime.toISOString(),
-        version: resolveEvalVersion(summary, config),
-        summary,
-      };
-    }));
+  const runSets = await Promise.all(evalRoots.map((root) => listRunsInRoot(root)));
+  const runs = runSets.flat();
 
   const sortedRuns = runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   if (sortedRuns.length > 0) {
     return sortedRuns;
   }
 
-  const config = await readJson(path.join(evalRoot, "config.json"));
-  return [await createDatasetOnlyRun(config)];
+  return [];
+}
+
+async function listRunsInRoot(root: string): Promise<RunListItem[]> {
+  const config = await readJson(path.join(root, "config.json"));
+  await ensureDatasetAvailable(root, config);
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const runs = await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("swe_"))
+    .map(async (entry) => {
+      const runPath = path.join(root, entry.name);
+      const info = await stat(runPath);
+      const summary = await readJson(path.join(runPath, "summary.json"));
+      const config = await readJson(path.join(runPath, "config.json")) ??
+        await readJson(path.join(root, "config.json"));
+      return {
+        name: entry.name,
+        path: runPath,
+        evalRoot: root,
+        updatedAt: info.mtime.toISOString(),
+        version: resolveEvalVersion(summary, config),
+        summary,
+      };
+    }));
+
+  if (runs.length > 0) {
+    return runs;
+  }
+
+  return config ? [await createDatasetOnlyRun(config, root)] : [];
+}
+
+async function ensureDatasetAvailable(
+  root: string,
+  config?: JsonRecord,
+): Promise<void> {
+  if (config?.autoPrepareDataset !== true) {
+    return;
+  }
+
+  const datasetPath = resolveConfiguredDatasetPath(config, root);
+  const expectedCount = numberValue(config.limit);
+  if (await isFile(datasetPath) &&
+    (expectedCount === undefined ||
+      (await readDatasetRecords(datasetPath)).length >= Math.max(1, Math.floor(expectedCount)))) {
+    return;
+  }
+
+  const existing = datasetPreparation.get(root);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const preparation = prepareDataset(root, config).catch((error) => {
+    console.warn(`Unable to auto-prepare SWE dataset at ${root}: ${stringifyError(error)}`);
+  });
+  datasetPreparation.set(root, preparation);
+  await preparation;
+}
+
+async function prepareDataset(
+  root: string,
+  config: JsonRecord,
+): Promise<void> {
+  const source = stringValue(config.datasetSource);
+  if (!source) {
+    throw new Error("datasetSource is missing from the SWE config.");
+  }
+
+  const split = stringValue(config.datasetSplit) ?? "test";
+  const output = resolveConfiguredDatasetPath(config, root);
+  const limit = numberValue(config.limit) ?? 5;
+  const loaderPath = path.resolve(workspaceRoot, "scripts/load_swe_verified_dataset.py");
+  const configuredPython = stringValue(config.python)?.trim();
+  const candidates = configuredPython
+    ? [{ command: configuredPython, prefix: [] as string[] }]
+    : [
+      { command: "python", prefix: [] as string[] },
+      { command: "py", prefix: ["-3"] },
+    ];
+  const errors: string[] = [];
+
+  for (const candidate of candidates) {
+    try {
+      await execFileAsync(
+        candidate.command,
+        [
+          ...candidate.prefix,
+          loaderPath,
+          "--source",
+          source,
+          "--split",
+          split,
+          "--output",
+          output,
+          "--limit",
+          String(Math.max(1, Math.floor(limit))),
+        ],
+        {
+          cwd: workspaceRoot,
+          maxBuffer: 16 * 1024 * 1024,
+          windowsHide: true,
+        },
+      );
+      const actualCount = (await readDatasetRecords(output)).length;
+      if (actualCount < Math.max(1, Math.floor(limit))) {
+        throw new Error(
+          `Dataset loader produced ${actualCount} records; expected at least ${Math.floor(limit)}.`,
+        );
+      }
+      return;
+    } catch (error) {
+      errors.push(`${candidate.command}: ${stringifyError(error)}`);
+    }
+  }
+
+  throw new Error(errors.join("\n"));
+}
+
+function resolveConfiguredDatasetPath(
+  config: JsonRecord | undefined,
+  root: string,
+): string {
+  const configured = stringValue(config?.datasetPath);
+  return configured
+    ? (path.isAbsolute(configured)
+      ? configured
+      : path.resolve(workspaceRoot, configured))
+    : path.join(root, "dataset.jsonl");
+}
+
+async function isFile(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 async function findRun(name: string): Promise<RunListItem> {
@@ -249,37 +396,149 @@ async function loadRunDetail(run: RunListItem): Promise<RunDetail> {
   }
 
   const entries = await readdir(run.path, { withFileTypes: true }).catch(() => []);
-  const cases = await Promise.all(entries
-    .filter((entry) => entry.isDirectory())
-    .map(async (entry) => {
-      const caseId = entry.name;
-      const caseDir = path.join(run.path, caseId);
-      const events = await readJsonl(path.join(caseDir, "events.jsonl"));
-      const summary = await readJson(path.join(caseDir, "summary.json"));
-      return summarizeCase(caseId, events, summary);
-    }));
-
   const rootSummary = run.summary;
+  const rootResults = indexRootSummaryResults(rootSummary);
+  const caseEntries = entries.filter((entry) => entry.isDirectory());
+  const caseIds = new Set(caseEntries.map((entry) => entry.name));
+  for (const caseId of rootResults.keys()) {
+    caseIds.add(caseId);
+  }
+
+  const cases = await Promise.all([...caseIds].map(async (caseId) => {
+    const caseDir = path.join(run.path, caseId);
+    const hasCaseDirectory = caseEntries.some((entry) => entry.name === caseId);
+    const events = hasCaseDirectory
+      ? await readJsonl(path.join(caseDir, "events.jsonl"))
+      : [];
+    const summary = hasCaseDirectory
+      ? await readJson(path.join(caseDir, "summary.json"))
+      : undefined;
+    return mergeCaseSummaryWithRunResult(
+      summarizeCase(caseId, events, summary),
+      rootResults.get(caseId),
+    );
+  }));
+
+  // A skipped item can have a zero-metric record in the current run even
+  // though the same item completed in an earlier run. Keep the current run
+  // as the source of truth when it has metrics, otherwise reuse that older
+  // metric-bearing result for the dashboard.
+  const historicalCases = await loadHistoricalMetricCases(run);
+  const displayCases = cases.map((item) => {
+    const historical = historicalCases.get(item.caseId);
+    return !hasMetricData(item) && historical
+      ? { ...historical, caseId: item.caseId, repo: item.repo ?? historical.repo }
+      : item;
+  });
+
   const config = await readEvalConfig(run);
-  const datasetItems = await loadDatasetItems(run, cases, config);
+  const datasetItems = await loadDatasetItems(run, displayCases, config);
   return {
     run,
     version: resolveEvalVersion(rootSummary, config),
     rootSummary,
-    cases: cases.sort((a, b) => a.caseId.localeCompare(b.caseId)),
+    cases: displayCases.sort((a, b) => a.caseId.localeCompare(b.caseId)),
     datasetItems,
     config,
-    totals: summarizeTotals(cases),
+    totals: summarizeTotals(displayCases),
   };
+}
+
+function indexRootSummaryResults(
+  summary?: JsonRecord,
+): Map<string, JsonRecord> {
+  const results = summary?.results;
+  if (!Array.isArray(results)) {
+    return new Map();
+  }
+
+  return new Map(
+    results.flatMap((value) => {
+      if (!isRecord(value)) {
+        return [];
+      }
+      const instanceId = stringValue(value.instanceId);
+      return instanceId ? [[instanceId, value] as const] : [];
+    }),
+  );
+}
+
+function mergeCaseSummaryWithRunResult(
+  summary: CaseSummary,
+  runResult?: JsonRecord,
+): CaseSummary {
+  if (!runResult) {
+    return summary;
+  }
+
+  applySummaryFallbacks(summary, runResult);
+  summary.repo ??= stringValue(runResult.repo);
+  summary.durationMs ??= numberValue(runResult.durationMs);
+  summary.errorCount ||= stringValue(runResult.error) ? 1 : 0;
+  summary.lastError ??= stringValue(runResult.error);
+  summary.cacheHitRate = computeCacheHitRate(
+    summary.promptCacheHitTokens,
+    summary.promptCacheMissTokens,
+  );
+  return summary;
+}
+
+function caseSummaryFromRunResult(result: JsonRecord): CaseSummary | undefined {
+  const caseId = stringValue(result.instanceId);
+  if (!caseId) {
+    return undefined;
+  }
+
+  const summary = emptyCaseSummary(caseId);
+  mergeCaseSummaryWithRunResult(summary, result);
+  return summary;
+}
+
+function hasMetricData(summary: CaseSummary): boolean {
+  return summary.totalTokens > 0 ||
+    summary.promptTokens > 0 ||
+    summary.completionTokens > 0 ||
+    summary.promptCacheHitTokens > 0 ||
+    summary.promptCacheMissTokens > 0;
+}
+
+async function loadHistoricalMetricCases(
+  run: RunListItem,
+): Promise<Map<string, CaseSummary>> {
+  const candidates = (await listRunsInRoot(run.evalRoot))
+    .filter((candidate) => !candidate.datasetOnly &&
+      candidate.path !== run.path &&
+      candidate.updatedAt.localeCompare(run.updatedAt) < 0)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const historical = new Map<string, CaseSummary>();
+
+  for (const candidate of candidates) {
+    const results = indexRootSummaryResults(candidate.summary);
+    for (const result of results.values()) {
+      const summary = caseSummaryFromRunResult(result);
+      if (summary && hasMetricData(summary) && !historical.has(summary.caseId)) {
+        historical.set(summary.caseId, summary);
+      }
+    }
+  }
+
+  return historical;
 }
 
 async function createDatasetOnlyRun(
   config?: JsonRecord,
+  root: string = evalRoot,
 ): Promise<RunListItem> {
-  const info = await stat(evalRoot).catch(() => undefined);
+  const info = await stat(root).catch(() => undefined);
+  const rootName = path.basename(root);
   return {
-    name: DATASET_ONLY_RUN_NAME,
-    path: evalRoot,
+    name: rootName === "swe-lite"
+      ? "swe_lite_dataset"
+      : rootName === "swe-lite-baseline"
+      ? "swe_lite_baseline_dataset"
+      : DATASET_ONLY_RUN_NAME,
+    path: root,
+    evalRoot: root,
     updatedAt: (info?.mtime ?? new Date()).toISOString(),
     version: resolveEvalVersion(undefined, config),
     summary: {},
@@ -300,7 +559,7 @@ function resolveEvalVersion(
 
 async function readEvalConfig(run: RunListItem): Promise<JsonRecord | undefined> {
   return await readJson(path.join(run.path, "config.json")) ??
-    await readJson(path.join(evalRoot, "config.json"));
+    await readJson(path.join(run.evalRoot, "config.json"));
 }
 
 async function loadDatasetItems(
@@ -328,7 +587,7 @@ async function loadDatasetItems(
       cacheHitRate: result?.cacheHitRate,
       totalTokens: result?.totalTokens,
       maxEstimatedTokens: result?.maxEstimatedTokens,
-      workspace: await getRepoWorkspaceStatus(record),
+      workspace: await getRepoWorkspaceStatus(record, run.evalRoot),
     };
   }));
 
@@ -342,7 +601,7 @@ async function resolveDatasetPathForRun(
   const candidates = [
     path.join(run.path, "dataset.jsonl"),
     stringValue(config?.datasetPath),
-    path.join(evalRoot, "dataset.jsonl"),
+    path.join(run.evalRoot, "dataset.jsonl"),
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of candidates) {
@@ -358,7 +617,7 @@ async function resolveDatasetPathForRun(
     }
   }
 
-  return path.resolve(evalRoot, "dataset.jsonl");
+  return path.resolve(run.evalRoot, "dataset.jsonl");
 }
 
 async function readDatasetRecords(filePath: string): Promise<JsonRecord[]> {
@@ -382,17 +641,14 @@ async function readDatasetRecords(filePath: string): Promise<JsonRecord[]> {
   return await readJsonl(filePath);
 }
 
-async function loadDashboardConfig(): Promise<JsonRecord | undefined> {
-  return await readJson(path.join(evalRoot, "config.json"));
-}
-
 async function resolveDashboardDatasetPath(
   config?: JsonRecord,
+  root: string = evalRoot,
 ): Promise<string> {
   const configuredPath = stringValue(config?.datasetPath);
   const candidates = [
     configuredPath,
-    path.join(evalRoot, "dataset.jsonl"),
+    path.join(root, "dataset.jsonl"),
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of candidates) {
@@ -408,42 +664,66 @@ async function resolveDashboardDatasetPath(
     }
   }
 
-  return path.join(evalRoot, "dataset.jsonl");
+  return path.join(root, "dataset.jsonl");
 }
 
-async function loadDashboardDatasetRecords(): Promise<JsonRecord[]> {
-  const config = await loadDashboardConfig();
-  const datasetPath = await resolveDashboardDatasetPath(config);
+async function loadDashboardDatasetRecords(
+  datasetDir?: string,
+): Promise<JsonRecord[]> {
+  const root = resolveEvalRoot(datasetDir);
+  const config = await readJson(path.join(root, "config.json"));
+  const datasetPath = await resolveDashboardDatasetPath(config, root);
   return await readDatasetRecords(datasetPath);
 }
 
 async function findDatasetInstance(
   instanceId: string,
+  datasetDir?: string,
 ): Promise<JsonRecord | undefined> {
-  return (await loadDashboardDatasetRecords())
-    .find((record) => stringValue(record.instance_id) === instanceId);
+  const roots = datasetDir ? [resolveEvalRoot(datasetDir)] : evalRoots;
+  for (const root of roots) {
+    const instance = (await loadDashboardDatasetRecords(root))
+      .find((record) => stringValue(record.instance_id) === instanceId);
+    if (instance) {
+      return instance;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveEvalRoot(datasetDir?: string): string {
+  if (!datasetDir) {
+    return evalRoot;
+  }
+
+  const requested = path.resolve(workspaceRoot, datasetDir);
+  return evalRoots.find((root) => path.resolve(root) === requested) ?? evalRoot;
 }
 
 async function getRepoWorkspaceStatus(
   instance: JsonRecord,
+  datasetDir?: string,
 ): Promise<SweWorkspaceStatus> {
   return await getSweWorkspaceStatus(
     toSweInstance(instance),
-    await createSweWorkspaceOptions(),
+    await createSweWorkspaceOptions(datasetDir),
   );
 }
 
 async function prepareRepoWorkspace(
   instance: JsonRecord,
+  datasetDir?: string,
 ): Promise<SweWorkspaceStatus> {
   return await prepareSweWorkspace(
     toSweInstance(instance),
-    await createSweWorkspaceOptions(),
+    await createSweWorkspaceOptions(datasetDir),
   );
 }
 
 async function exportRepoPatch(
   instance: JsonRecord,
+  datasetDir?: string,
 ): Promise<{
   ok: true;
   instanceId: string;
@@ -456,7 +736,7 @@ async function exportRepoPatch(
   ok: false;
   error: string;
 }> {
-  const workspace = await getRepoWorkspaceStatus(instance);
+  const workspace = await getRepoWorkspaceStatus(instance, datasetDir);
   if (!isUsableSweWorkspaceStatus(workspace.status)) {
     return {
       ok: false,
@@ -478,7 +758,7 @@ async function exportRepoPatch(
   const instanceId = stringValue(instance.instance_id) ?? "swe-item";
   const savedPath = patch.trim().length === 0
     ? undefined
-    : await saveSwePatchFile(instanceId, patch);
+    : await saveSwePatchFile(instanceId, patch, datasetDir);
 
   return {
     ok: true,
@@ -494,18 +774,19 @@ async function exportRepoPatch(
 async function saveSwePatchFile(
   instanceId: string,
   patch: string,
+  datasetDir?: string,
 ): Promise<string> {
-  const directory = resolveSwePatchDirectory();
+  const directory = resolveSwePatchDirectory(datasetDir);
   await mkdir(directory, { recursive: true });
   const filePath = path.join(directory, `${sanitizePatchFileName(instanceId)}.patch`);
   await writeFile(filePath, patch, "utf8");
   return filePath;
 }
 
-function resolveSwePatchDirectory(): string {
+function resolveSwePatchDirectory(datasetDir?: string): string {
   const configured = process.env.OPENCAT_SWE_PATCH_DIR?.trim();
   if (!configured) {
-    return path.join(evalRoot, "patches");
+    return path.join(resolveEvalRoot(datasetDir), "patches");
   }
 
   return path.isAbsolute(configured) ? configured : path.resolve(workspaceRoot, configured);
@@ -519,14 +800,18 @@ function isUsableSweWorkspaceStatus(status: SweWorkspaceStatus["status"]): boole
   return status === "ready" || status === "dirty" || status === "wrong-head";
 }
 
-async function createSweWorkspaceOptions(): Promise<SweWorkspaceOptions> {
-  const config = await loadDashboardConfig();
+async function createSweWorkspaceOptions(
+  datasetDir?: string,
+): Promise<SweWorkspaceOptions> {
+  const root = resolveEvalRoot(datasetDir);
+  const config = await readJson(path.join(root, "config.json"));
   const value = process.env.SWE_VERIFIED_ALLOW_NETWORK_CLONE ??
     config?.allowNetworkClone;
   return {
     projectRoot: workspaceRoot,
     reposDir: stringValue(config?.reposDir)?.trim(),
     allowNetworkClone: value === true || value === "true" || value === "1",
+    workspaceNamespace: stringValue(config?.workspaceNamespace)?.trim(),
   };
 }
 
@@ -666,7 +951,10 @@ function summarizeCase(
       result.hardHistorySnipCount += event.hardHistorySnipApplied ? 1 : 0;
       result.toolResultBudgetReplacementCount +=
         numberValue(event.toolResultBudgetReplacementCount) ?? 0;
-      result.bulkyToolCompactCount += numberValue(event.bulkyToolCompactCount) ?? 0;
+      result.bulkyToolCompactCount = Math.max(
+        result.bulkyToolCompactCount,
+        numberValue(event.bulkyToolCompactCount) ?? 0,
+      );
       result.toolResultCharsBeforeBudget +=
         numberValue(event.toolResultCharsBeforeBudget) ?? 0;
       result.toolResultCharsAfterBudget +=
@@ -1279,6 +1567,7 @@ function renderDashboardHtml(): string {
   </main>
   <script>
     const state = { runs: [], detail: null, selectedCase: "", sideView: "conversation" };
+    const dashboardDatasetDir = ${JSON.stringify(path.relative(workspaceRoot, evalRoot).replace(/\\/g, "/"))};
     const $ = (id) => document.getElementById(id);
     const fmt = new Intl.NumberFormat();
     const pct = (value) => Number.isFinite(value) ? Math.round(value * 1000) / 10 + "%" : "0%";
@@ -1325,9 +1614,10 @@ function renderDashboardHtml(): string {
 
     function openSweChatSession(instanceId) {
       if (!instanceId) return;
+      const datasetDir = state.detail?.run?.evalRoot || dashboardDatasetDir;
       window.location.href = ${JSON.stringify(webChatUrl)} +
         "/?swe=" + encodeURIComponent(instanceId) +
-        "&draft=investigate";
+        "&draft=investigate&datasetDir=" + encodeURIComponent(datasetDir);
     }
 
     async function copyPromptForItem(item, kind) {
@@ -1348,7 +1638,7 @@ function renderDashboardHtml(): string {
       }
 
       const lines = [
-        "You are working on a SWE-bench Verified issue in OpenCat.",
+        "You are working on a SWE-bench issue in OpenCat.",
         "Modify the checked-out repository to fix the issue. Prefer minimal, well-tested changes.",
         "Use the available tools to inspect, edit, and verify the code.",
         "Do not fetch unrelated web content unless the repository itself requires it.",
@@ -1370,7 +1660,7 @@ function renderDashboardHtml(): string {
 
     function buildSweInvestigatePrompt(item) {
       return [
-        "You are working on a SWE-bench Verified issue in OpenCat.",
+        "You are working on a SWE-bench issue in OpenCat.",
         "First investigate only. Do not modify files yet. Do not call Edit or Write.",
         "Read the issue, inspect the checked-out repository, identify the likely root cause, and explain the smallest code change you would make next.",
         "Use tools to inspect relevant files. Do not fetch unrelated web content unless the repository itself requires it.",
@@ -1454,6 +1744,7 @@ function renderDashboardHtml(): string {
         "datasetSource",
         "datasetPath",
         "datasetSplit",
+        "autoPrepareDataset",
         "limit",
         "userRounds",
         "model",
@@ -1655,7 +1946,10 @@ function renderDashboardHtml(): string {
         button.textContent = "Preparing";
       }
       try {
-        const result = await postJson("/api/prepare-repo", { instanceId: instanceId });
+        const result = await postJson("/api/prepare-repo", {
+          instanceId: instanceId,
+          datasetDir: state.detail?.run?.evalRoot || dashboardDatasetDir,
+        });
         if (result && result.status === "failed") {
           alert("Prepare failed: " + (result.error || "unknown error"));
         }
@@ -1681,7 +1975,12 @@ function renderDashboardHtml(): string {
       button.disabled = true;
       button.textContent = "Preparing...";
       try {
-        const result = await postJson("/api/prepare-all-repos", {});
+        const result = await postJson(
+          "/api/prepare-all-repos?datasetDir=" + encodeURIComponent(
+            state.detail?.run?.evalRoot || dashboardDatasetDir,
+          ),
+          {},
+        );
         const failures = (result.results || []).filter((item) => item && item.status === "failed");
         if (failures.length > 0) {
           alert("Prepare all completed with " + failures.length + " failure(s). First error: " + (failures[0].error || "unknown error"));
@@ -1709,7 +2008,12 @@ function renderDashboardHtml(): string {
         button.textContent = "Exporting";
       }
       try {
-        const payload = await fetchJson("/api/patch?instanceId=" + encodeURIComponent(item.instanceId));
+        const payload = await fetchJson(
+          "/api/patch?instanceId=" + encodeURIComponent(item.instanceId) +
+            "&datasetDir=" + encodeURIComponent(
+              state.detail?.run?.evalRoot || dashboardDatasetDir,
+            ),
+        );
         if (!payload.ok) {
           alert(payload.error || "Export patch failed.");
           return;
@@ -1777,6 +2081,12 @@ function sanitizeSegment(value: string): string {
 
 function sanitizePath(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, "_");
+}
+
+function getCliArgument(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  const value = index >= 0 ? process.argv[index + 1] : undefined;
+  return value?.trim() || undefined;
 }
 
 function readPort(): number {

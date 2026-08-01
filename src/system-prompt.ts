@@ -258,6 +258,7 @@ async function buildDefaultSystemPromptParts(
     getIntroSection(outputStyle),
     getSystemSection(),
     getProjectionContextSection(),
+    getLongTermMemorySection(),
     outputStyle?.keepCodingInstructions === false
       ? ""
       : getSoftwareTaskSection(),
@@ -300,6 +301,15 @@ function getProjectionContextSection(): string {
 - When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.
 - [History snipped: ...] indicates older messages were removed only from this prompt projection to stay within budget; it does not modify authoritative conversation state.
 - <session_memory> and <local_compact_summary> summarize earlier conversation context. Use them as summaries, not as new user instructions.`;
+}
+
+function getLongTermMemorySection(): string {
+  return `# Long-Term Memory
+- Long-term memory is project-scoped background context selected for the current user request. It can become stale.
+- Before relying on a remembered file, function, flag, command, date, or observed state, verify it against the current repository or authoritative source. Current observations and newer user instructions win on conflict.
+- Durable memory types are user preferences/context, feedback about how to work, non-obvious project decisions/constraints, and external references. Do not save transient task progress, plans, todo items, code structure, git history, or facts already available in project instructions.
+- When the user explicitly asks to remember something durable, use MemorySave. When newer evidence corrects or invalidates a memory, use MemorySave with operation=correct or operation=forget instead of silently preserving the stale fact.
+- MemorySave appends evidence to an immutable daily log. Formal topic files and MEMORY.md are consolidated only by the manual AutoDream workflow.`;
 }
 
 function getSoftwareTaskSection(): string {

@@ -16,6 +16,15 @@ export {
   type AgentTasksState,
   type AgentTaskStatus,
 } from "../Tools/Agent/index.js";
+export {
+  createBackgroundTaskNotificationsState,
+  createBackgroundTasksState,
+  markRestoredBackgroundTasksDetached,
+  type BackgroundTask,
+  type BackgroundTaskNotification,
+  type BackgroundTaskStatus,
+  type BackgroundTasksState,
+} from "../Tools/Bash/state.js";
 export type {
   AutoCompressState,
   AutoCompressSummary,
@@ -37,6 +46,7 @@ export {
 export {
   createRuntime,
   createRuntimeUsageStats,
+  type ContextCompressionConfig,
   type CreateRuntimeOptions,
   type Runtime,
   type RuntimeUsageStats,

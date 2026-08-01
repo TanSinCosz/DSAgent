@@ -15,6 +15,7 @@ export type AgentTask = {
   status: AgentTaskStatus;
   createdAt: number;
   updatedAt: number;
+  lastNotificationAt?: number;
   pendingMessages: string[];
   outputFile?: string;
   worktreePath?: string;

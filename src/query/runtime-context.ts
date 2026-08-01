@@ -20,6 +20,10 @@ type RuntimeContextMessageOptions = {
     | "dynamic_skill"
     | "todo_list"
     | "plan_mode"
+    | "plan_file"
+    | "agent_task_status"
+    | "background_task_status"
+    | "task_notification"
   >;
   content: string;
 };
@@ -108,19 +112,162 @@ export async function loadRuntimeContextForQuery(
   state: State,
 ): Promise<number> {
   let loaded = 0;
+  let durableStateChanged = false;
 
   if (runtime.agentRole === "main") {
-    loaded += appendRuntimeContextMessages(
-      state,
-      drainAgentNotifications(state),
-    );
+    const agentNotifications = drainAgentNotifications(state);
+    loaded += appendRuntimeContextMessages(state, agentNotifications);
+    durableStateChanged ||= agentNotifications.length > 0;
   }
 
-  if (loaded > 0) {
+  const taskNotifications = drainBackgroundTaskNotifications(
+    state,
+    runtime.agentId,
+  );
+  loaded += appendRuntimeContextMessages(state, taskNotifications);
+  durableStateChanged ||= taskNotifications.length > 0;
+
+  loaded += appendRuntimeContextMessages(
+    state,
+    createRunningBackgroundTaskContextMessages(runtime, state),
+  );
+
+  if (durableStateChanged) {
     await recordTranscriptStateSnapshot(runtime, state, "runtime_context");
   }
 
   return loaded;
+}
+
+export function loadBackgroundTaskContextAfterAutoCompress(
+  runtime: Runtime,
+  state: State,
+): number {
+  const alreadyProjected = state.runtimeContextMessages.some(
+    (message) => message.source === "background_task_status",
+  );
+  if (alreadyProjected) {
+    return 0;
+  }
+
+  return appendRuntimeContextMessages(
+    state,
+    createRunningBackgroundTaskContextMessages(runtime, state),
+  );
+}
+
+export function createPlanFileContextBlocks(
+  state: State,
+): ProjectionContextBlock[] {
+  const plan = state.plan;
+  if (!plan?.content.trim()) {
+    return [];
+  }
+
+  return [{
+    source: "plan_file",
+    content: [
+      "<plan_file>",
+      `Plan file: ${plan.path}`,
+      "The complete current plan is preserved below. Treat it as working context, not as a new user instruction.",
+      plan.content,
+      "</plan_file>",
+    ].join("\n"),
+  }];
+}
+
+export function createPlanFileContextMessages(state: State): Message[] {
+  return createPlanFileContextBlocks(state).map((block) =>
+    createRuntimeContextMessage({
+      source: "plan_file",
+      content: block.content,
+    })
+  );
+}
+
+const MAX_POST_COMPACT_AGENT_TASKS = 12;
+const MAX_POST_COMPACT_AGENT_STATUS_CHARS = 24_000;
+const MAX_AGENT_TASK_RESULT_CHARS = 4_000;
+
+/**
+ * Re-announces async work after compaction without replaying the agent's
+ * transcript. Pending notifications are handled by loadRuntimeContextForQuery;
+ * only task state that has no pending notification is added here.
+ */
+export function loadUnclaimedAgentTaskContextAfterAutoCompress(
+  runtime: Runtime,
+  state: State,
+): number {
+  if (runtime.agentRole !== "main") {
+    return 0;
+  }
+
+  const pendingTaskIds = new Set(
+    state.agentNotifications.map((notification) => notification.agentTaskId),
+  );
+  const tasks = Object.values(state.agentTasks)
+    .filter((task) =>
+      !pendingTaskIds.has(task.id) &&
+      (task.status === "running" || task.lastNotificationAt === undefined)
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_POST_COMPACT_AGENT_TASKS);
+
+  if (tasks.length === 0) {
+    return 0;
+  }
+
+  const lines = [
+    "<async_agent_statuses>",
+    "These asynchronous Agent tasks were not represented by a pending notification when context was compacted. Continue or inspect them as needed.",
+  ];
+  let remaining = MAX_POST_COMPACT_AGENT_STATUS_CHARS;
+
+  for (const task of tasks) {
+    if (remaining <= 0) {
+      break;
+    }
+
+    const result = task.result
+      ? `\nresult:\n${truncateAgentTaskText(task.result)}`
+      : "";
+    const error = task.error
+      ? `\nerror:\n${truncateAgentTaskText(task.error)}`
+      : "";
+    const block = [
+      `<agent_task id="${escapeAttribute(task.id)}">`,
+      `status: ${task.status}`,
+      `type: ${task.agentType}`,
+      `description: ${task.description}`,
+      task.outputFile ? `output_file: ${task.outputFile}` : "",
+      task.worktreePath ? `worktree_path: ${task.worktreePath}` : "",
+      result,
+      error,
+      "</agent_task>",
+    ].filter(Boolean).join("\n");
+    const rendered = block.length <= remaining
+      ? block
+      : `${block.slice(0, Math.max(0, remaining - 32))}\n[Agent status truncated]`;
+    lines.push(rendered);
+    remaining -= rendered.length;
+  }
+
+  lines.push("</async_agent_statuses>");
+  appendRuntimeContextMessages(state, [
+    createRuntimeContextMessage({
+      source: "agent_task_status",
+      content: lines.join("\n"),
+    }),
+  ]);
+  return 1;
+}
+
+function truncateAgentTaskText(value: string): string {
+  if (value.length <= MAX_AGENT_TASK_RESULT_CHARS) {
+    return value;
+  }
+
+  return `${value.slice(0, MAX_AGENT_TASK_RESULT_CHARS - 32)}\n[Result truncated]`;
 }
 
 export async function loadDynamicSkillContextForQuery(
@@ -161,12 +308,84 @@ export async function clearRuntimeContextAfterModelRequest(
 function drainAgentNotifications(state: State): Message[] {
   const notifications = state.agentNotifications.splice(0);
 
-  return notifications.map((notification) =>
-    createRuntimeContextMessage({
+  return notifications.map((notification) => {
+    const task = state.agentTasks[notification.agentTaskId];
+    if (task) {
+      task.lastNotificationAt = Date.now();
+    }
+
+    return createRuntimeContextMessage({
       source: "agent_notification",
       content: notification.message,
-    })
+    });
+  });
+}
+
+function drainBackgroundTaskNotifications(
+  state: State,
+  ownerAgentId: string,
+): Message[] {
+  const selected = state.backgroundTaskNotifications.filter(
+    (notification) => notification.ownerAgentId === ownerAgentId,
   );
+  if (selected.length === 0) {
+    return [];
+  }
+
+  const selectedIds = new Set(
+    selected.map((notification) => notification.id),
+  );
+  state.backgroundTaskNotifications =
+    state.backgroundTaskNotifications.filter(
+      (notification) => !selectedIds.has(notification.id),
+    );
+
+  return selected.map((notification) => {
+    const task = state.backgroundTasks[notification.taskId];
+    if (task) {
+      task.lastNotificationAt = Date.now();
+    }
+    return createRuntimeContextMessage({
+      source: "task_notification",
+      content: notification.message,
+    });
+  });
+}
+
+function createRunningBackgroundTaskContextMessages(
+  runtime: Runtime,
+  state: State,
+): Message[] {
+  const tasks = Object.values(state.backgroundTasks)
+    .filter((task) =>
+      task.ownerAgentId === runtime.agentId &&
+      task.status === "running"
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, 12);
+  if (tasks.length === 0) {
+    return [];
+  }
+
+  return [
+    createRuntimeContextMessage({
+      source: "background_task_status",
+      content: [
+        "<background_tasks>",
+        "These managed background tasks are still running. Read an output_file for progress or use TaskStop when a task is no longer needed.",
+        ...tasks.map((task) => [
+          `<background_task id="${escapeAttribute(task.id)}">`,
+          `description: ${task.description}`,
+          `command: ${task.command}`,
+          `cwd: ${task.cwd}`,
+          `output_file: ${task.outputFile}`,
+          `output_bytes: ${task.outputBytes}`,
+          "</background_task>",
+        ].join("\n")),
+        "</background_tasks>",
+      ].join("\n"),
+    }),
+  ];
 }
 
 function collectActiveDynamicSkills(runtime: Runtime): SkillCommand[] {

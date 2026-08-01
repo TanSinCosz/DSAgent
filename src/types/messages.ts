@@ -25,7 +25,11 @@ export type MessageSource =
   | "long_term_memory"
   | "dynamic_skill"
   | "todo_list"
-  | "plan_mode";
+  | "plan_mode"
+  | "plan_file"
+  | "agent_task_status"
+  | "background_task_status"
+  | "task_notification";
 
 export type MessageSize = {
   /**

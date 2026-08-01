@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenCat Module Call Graph</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1017;
+      --panel: #121a24;
+      --panel-2: #172230;
+      --line: #2a394b;
+      --text: #e7edf5;
+      --muted: #8fa2b8;
+      --accent: #66b3ff;
+      --entry: #25577f;
+      --query: #245e5a;
+      --context: #6b4b21;
+      --tool: #4e3b73;
+      --agent: #704044;
+      --memory: #356047;
+      --storage: #3e4f60;
+      --provider: #555b2b;
+      --telemetry: #5c3f6e;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+
+    header {
+      padding: 22px 28px 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #111b28 0%, #0d141d 100%);
+    }
+    header h1 { margin: 0 0 5px; font-size: 23px; letter-spacing: .2px; }
+    header p { margin: 0; color: var(--muted); }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      padding: 14px 28px;
+      border-bottom: 1px solid var(--line);
+      background: #0e161f;
+    }
+    .toolbar label { color: var(--muted); margin-right: 3px; }
+    .toolbar input {
+      width: 240px;
+      padding: 8px 10px;
+      border: 1px solid #38506a;
+      border-radius: 6px;
+      outline: 0;
+      color: var(--text);
+      background: #0a1119;
+    }
+    button {
+      padding: 7px 10px;
+      border: 1px solid #38506a;
+      border-radius: 6px;
+      color: var(--text);
+      background: #152230;
+      cursor: pointer;
+    }
+    button:hover, button.active { border-color: var(--accent); background: #1c344b; }
+    .hint { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      min-height: calc(100vh - 150px);
+    }
+    .graph-wrap { min-width: 0; overflow: auto; padding: 18px; }
+    #graph {
+      display: block;
+      width: 1480px;
+      height: 950px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px),
+        #0c131c;
+      background-size: 32px 32px;
+    }
+    aside {
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+      padding: 20px;
+    }
+    aside h2 { margin: 0 0 14px; font-size: 16px; }
+    aside h3 { margin: 18px 0 6px; font-size: 13px; color: var(--accent); }
+    aside p { margin: 7px 0; color: var(--muted); }
+    aside code {
+      display: block;
+      padding: 8px 9px;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: #d9e8f8;
+      background: #0b121a;
+      font: 12px/1.45 Consolas, monospace;
+    }
+    .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .legend-item { display: flex; gap: 7px; align-items: center; color: var(--muted); font-size: 12px; }
+    .swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255,255,255,.3); }
+    .empty { color: var(--muted); }
+
+    .lane-label { fill: #7890a9; font-size: 12px; font-weight: 600; letter-spacing: 1px; }
+    .edge { stroke: #52677d; stroke-width: 1.5; fill: none; opacity: .7; transition: .15s; }
+    .edge-label { fill: #8195ab; font-size: 11px; opacity: .85; pointer-events: none; }
+    .edge.dim, .node.dim { opacity: .12; }
+    .edge.highlight { stroke: #e6f3ff; stroke-width: 3; opacity: 1; }
+    .node { cursor: pointer; transition: opacity .15s; }
+    .node rect { stroke: rgba(255,255,255,.28); stroke-width: 1; rx: 8; }
+    .node:hover rect, .node.selected rect { stroke: #f1f8ff; stroke-width: 2; }
+    .node-title { fill: #f1f6fb; font-size: 13px; font-weight: 700; pointer-events: none; }
+    .node-file { fill: #b3c3d3; font-size: 10px; pointer-events: none; }
+    .node-desc { fill: #d6e2ed; font-size: 10px; pointer-events: none; }
+    .phase { fill: none; stroke: #34485b; stroke-dasharray: 5 6; }
+    .phase-title { fill: #60768d; font-size: 12px; font-weight: 700; }
+
+    @media (max-width: 920px) {
+      main { grid-template-columns: 1fr; }
+      aside { border-left: 0; border-top: 1px solid var(--line); }
+      .hint { width: 100%; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>OpenCat 系统模块调用图</h1>
+    <p>从入口、主查询循环、上下文投影、工具执行到 Agent / Memory / 持久化的运行时关系。</p>
+  </header>
+
+  <div class="toolbar">
+    <label for="search">查找模块</label>
+    <input id="search" type="search" placeholder="例如 query、auto-compress、Memory">
+    <button class="filter active" data-filter="all">全部</button>
+    <button class="filter" data-filter="entry">入口</button>
+    <button class="filter" data-filter="query">查询</button>
+    <button class="filter" data-filter="context">上下文</button>
+    <button class="filter" data-filter="tool">工具</button>
+    <button class="filter" data-filter="agent">Agent</button>
+    <button class="filter" data-filter="memory">Memory</button>
+    <button class="filter" data-filter="storage">存储</button>
+    <button id="reset">重置视图</button>
+    <span class="hint">点击节点查看职责；再次点击可高亮关联路径</span>
+  </div>
+
+  <main>
+    <section class="graph-wrap">
+      <svg id="graph" viewBox="0 0 1480 950" role="img" aria-label="OpenCat module call graph">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#52677d"></path>
+          </marker>
+          <marker id="arrow-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#e6f3ff"></path>
+          </marker>
+        </defs>
+
+        <g aria-hidden="true">
+          <rect class="phase" x="28" y="32" width="1420" height="102" rx="12"></rect>
+          <text class="phase-title" x="48" y="56">入口与运行时装配</text>
+          <rect class="phase" x="28" y="158" width="1420" height="350" rx="12"></rect>
+          <text class="phase-title" x="48" y="182">主查询循环：每轮 build → request → response → tool → 下一轮</text>
+          <rect class="phase" x="28" y="532" width="1420" height="180" rx="12"></rect>
+          <text class="phase-title" x="48" y="556">上下文与状态维护</text>
+          <rect class="phase" x="28" y="736" width="1420" height="182" rx="12"></rect>
+          <text class="phase-title" x="48" y="760">持久化、遥测与评测</text>
+        </g>
+
+        <g id="edges"></g>
+        <g id="edge-labels"></g>
+        <g id="nodes"></g>
+      </svg>
+    </section>
+
+    <aside>
+      <h2 id="detail-title">选择一个模块</h2>
+      <p id="detail-text" class="empty">点击图中的节点，查看它在一次请求中的职责、调用者和下游模块。</p>
+      <div id="detail-body"></div>
+      <h3>图例</h3>
+      <div class="legend">
+        <div class="legend-item"><span class="swatch" style="background:var(--entry)"></span>入口</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--query)"></span>查询</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--context)"></span>上下文</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--tool)"></span>工具</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--agent)"></span>Agent</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--memory)"></span>Memory</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--storage)"></span>存储</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--telemetry)"></span>遥测</div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const nodes = [
+      { id:'cli', group:'entry', x:70, y:78, w:150, title:'CLI / Web / SWE', file:'src/cli.ts · web-cli.ts · eval-dashboard.ts', desc:'创建 Runtime、State 和工具集合' },
+      { id:'runtime', group:'entry', x:300, y:78, w:180, title:'createRuntime', file:'src/types/runtime.ts', desc:'绑定模型、工具、cwd、权限和 Agent 身份' },
+      { id:'tools', group:'tool', x:560, y:78, w:190, title:'createDefaultTools', file:'src/Tools/index.ts', desc:'注册内置工具，并合并 MCP 工具' },
+      { id:'mcp', group:'tool', x:830, y:78, w:190, title:'Configured MCP', file:'src/mcp/config.ts', desc:'加载 MCP 配置并适配远程工具' },
+      { id:'state', group:'storage', x:1110, y:78, w:190, title:'State', file:'src/types/state.ts', desc:'保存 Messages、压缩状态、任务和记忆状态' },
+
+      { id:'query', group:'query', x:65, y:220, w:190, title:'query / _query', file:'src/query.ts', desc:'主循环：每轮准备上下文、请求模型、执行工具' },
+      { id:'build', group:'context', x:335, y:220, w:210, title:'buildMessagesForQuery', file:'src/query/messages.ts', desc:'投影已有状态，必要时新增 compact / snip' },
+      { id:'context', group:'context', x:625, y:220, w:190, title:'materializeRequestContext', file:'src/query.ts · runtime-context.ts', desc:'加载计划、技能、Agent 状态和运行时附件' },
+      { id:'request', group:'query', x:895, y:220, w:190, title:'createStreamRequest', file:'src/query/request.ts', desc:'将最终 DeepSeek messages 发送给模型' },
+      { id:'stream', group:'provider', x:1160, y:220, w:190, title:'DeepSeek client', file:'src/deepseek/client.ts', desc:'流式接收 reasoning、text、tool_calls 和 usage' },
+
+      { id:'projection', group:'context', x:60, y:375, w:205, title:'Projection pipeline', file:'src/query/messages.ts', desc:'auto summary → tool budget → bulky → snip → provider messages' },
+      { id:'budget', group:'context', x:345, y:375, w:180, title:'Tool result budget', file:'src/query/messages.ts', desc:'按工具结果组替换旧结果，保留可恢复引用' },
+      { id:'bulky', group:'context', x:600, y:375, w:180, title:'Bulky compact', file:'src/query/messages.ts', desc:'上下文过大时压缩目标工具结果' },
+      { id:'snip', group:'context', x:855, y:375, w:180, title:'History snip', file:'src/query/messages.ts', desc:'bulky 不足时建立历史边界；过大时可回滚' },
+      { id:'compress', group:'memory', x:1120, y:375, w:205, title:'Auto-compress', file:'src/auto-compress/auto-compress.ts', desc:'复用 session memory，恢复计划、技能和文件状态' },
+
+      { id:'executor', group:'tool', x:65, y:585, w:190, title:'Tool executor', file:'src/Tools/executor.ts', desc:'校验输入、权限审批、调用工具、格式化结果' },
+      { id:'permission', group:'tool', x:330, y:585, w:190, title:'Permission / Plan', file:'src/Tools/executor.ts · Plan', desc:'处理用户审批、Plan 模式和临时命令规则' },
+      { id:'agent', group:'agent', x:600, y:585, w:190, title:'Agent runner', file:'src/Tools/Agent/runner.ts', desc:'sync / async / fork 子 Agent，支持 worktree 隔离' },
+      { id:'session', group:'memory', x:870, y:585, w:205, title:'Session memory', file:'src/session-memory/session-memory.ts', desc:'在安全边界 fork Agent 更新滚动记忆文件' },
+      { id:'longterm', group:'memory', x:1150, y:585, w:205, title:'Long-term memory', file:'src/query/long-term-memory.ts · Memory', desc:'跨 session 提取、检索和维护 memory 文件' },
+
+      { id:'transcript', group:'storage', x:70, y:790, w:205, title:'Transcript persistence', file:'src/transcript/persistence.ts', desc:'记录消息和 compact / snip / memory 状态快照' },
+      { id:'resultstore', group:'storage', x:350, y:790, w:205, title:'Tool result storage', file:'src/tool-results/storage.ts', desc:'大工具结果落盘，模型收到 preview 和引用' },
+      { id:'plan', group:'storage', x:630, y:790, w:180, title:'Plan / Todo state', file:'src/plan/persistence.ts · Tools/TodoWrite', desc:'恢复长期任务计划和待办状态' },
+      { id:'patch', group:'storage', x:880, y:790, w:205, title:'Patch snapshot', file:'src/workspace/patch-snapshot.ts', desc:'记录每轮或 query 结束时的 Git diff 快照' },
+      { id:'telemetry', group:'telemetry', x:1160, y:790, w:205, title:'Telemetry / Eval', file:'src/telemetry · eval-dashboard.ts', desc:'记录 context、cache、tool、错误和 SWE 运行结果' }
+    ];
+
+    const edges = [
+      ['cli','runtime','创建'], ['runtime','tools','注册'], ['tools','mcp','合并'], ['runtime','state','持有'],
+      ['runtime','query','进入'], ['query','build','准备'], ['build','projection','投影'], ['projection','budget','先应用'],
+      ['projection','bulky','超阈值'], ['projection','snip','bulky 不足'], ['query','context','追加附件'],
+      ['context','build','重新构建'], ['build','request','最终 messages'], ['request','stream','API 请求'],
+      ['stream','query','assistant / tool_calls'], ['query','executor','执行工具'], ['executor','permission','审批'],
+      ['permission','executor','允许 / 拒绝'], ['executor','state','写入结果'], ['executor','resultstore','大结果落盘'],
+      ['executor','agent','Agent 工具'], ['agent','query','子 Agent query'], ['query','session','安全边界'],
+      ['session','agent','fork 更新'], ['query','longterm','完成后提取'], ['compress','session','复用记忆'],
+      ['compress','plan','恢复计划'], ['compress','state','更新压缩状态'], ['query','compress','上下文过大'],
+      ['query','transcript','记录消息'], ['query','patch','记录 diff'], ['query','telemetry','运行事件'],
+      ['build','telemetry','压缩统计'], ['stream','telemetry','usage / cache'], ['agent','transcript','Agent 状态'],
+      ['state','transcript','快照来源'], ['plan','context','计划附件'], ['longterm','context','记忆附件']
+    ];
+
+    const palette = {
+      entry:'var(--entry)', query:'var(--query)', context:'var(--context)', tool:'var(--tool)',
+      agent:'var(--agent)', memory:'var(--memory)', storage:'var(--storage)', provider:'var(--provider)', telemetry:'var(--telemetry)'
+    };
+    const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+    const edgeGroup = document.getElementById('edges');
+    const labelGroup = document.getElementById('edge-labels');
+    const nodeGroup = document.getElementById('nodes');
+    let selected = null;
+    let activeFilter = 'all';
+    let searchTerm = '';
+
+    function center(n) { return { x: n.x + n.w / 2, y: n.y + 27 }; }
+    function drawEdges() {
+      edgeGroup.innerHTML = '';
+      labelGroup.innerHTML = '';
+      for (const [fromId, toId, label] of edges) {
+        const from = nodeMap[fromId], to = nodeMap[toId];
+        const a = center(from), b = center(to);
+        const bend = Math.abs(a.y - b.y) > 45 ? (a.y + b.y) / 2 : a.y;
+        const d = Math.abs(a.y - b.y) > 45
+          ? `M ${a.x} ${a.y} C ${a.x} ${bend}, ${b.x} ${bend}, ${b.x} ${b.y}`
+          : `M ${a.x} ${a.y} C ${(a.x + b.x) / 2} ${a.y - 18}, ${(a.x + b.x) / 2} ${b.y + 18}, ${b.x} ${b.y}`;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.classList.add('edge');
+        path.dataset.from = fromId;
+        path.dataset.to = toId;
+        path.setAttribute('d', d);
+        path.setAttribute('marker-end', 'url(#arrow)');
+        edgeGroup.appendChild(path);
+        if (Math.abs(a.y - b.y) > 45) {
+          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          text.classList.add('edge-label');
+          text.textContent = label;
+          text.setAttribute('x', String((a.x + b.x) / 2 + 5));
+          text.setAttribute('y', String(bend - 5));
+          labelGroup.appendChild(text);
+        }
+      }
+    }
+
+    function drawNodes() {
+      nodeGroup.innerHTML = '';
+      for (const n of nodes) {
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        group.classList.add('node');
+        group.dataset.id = n.id;
+        group.dataset.group = n.group;
+        group.setAttribute('transform', `translate(${n.x} ${n.y})`);
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('width', n.w);
+        rect.setAttribute('height', 62);
+        rect.setAttribute('fill', palette[n.group]);
+        group.appendChild(rect);
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        title.classList.add('node-title'); title.setAttribute('x', '12'); title.setAttribute('y', '19'); title.textContent = n.title;
+        const file = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        file.classList.add('node-file'); file.setAttribute('x', '12'); file.setAttribute('y', '35'); file.textContent = n.file;
+        const desc = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        desc.classList.add('node-desc'); desc.setAttribute('x', '12'); desc.setAttribute('y', '51'); desc.textContent = n.desc;
+        group.append(title, file, desc);
+        group.addEventListener('click', () => selectNode(n.id));
+        nodeGroup.appendChild(group);
+      }
+    }
+
+    function matches(n) {
+      const haystack = `${n.id} ${n.title} ${n.file} ${n.desc}`.toLowerCase();
+      return (activeFilter === 'all' || n.group === activeFilter) && (!searchTerm || haystack.includes(searchTerm));
+    }
+
+    function applyVisibility() {
+      const visible = new Set(nodes.filter(matches).map(n => n.id));
+      for (const el of nodeGroup.children) {
+        const isVisible = visible.has(el.dataset.id);
+        el.classList.toggle('dim', !isVisible);
+      }
+      for (const el of edgeGroup.children) {
+        el.classList.toggle('dim', !(visible.has(el.dataset.from) && visible.has(el.dataset.to)));
+      }
+    }
+
+    function selectNode(id) {
+      selected = selected === id ? null : id;
+      document.querySelectorAll('.node').forEach(el => el.classList.toggle('selected', el.dataset.id === selected));
+      document.querySelectorAll('.edge').forEach(el => {
+        const hot = selected && (el.dataset.from === selected || el.dataset.to === selected);
+        el.classList.toggle('highlight', Boolean(hot));
+        if (hot) el.setAttribute('marker-end', 'url(#arrow-hot)');
+        else el.setAttribute('marker-end', 'url(#arrow)');
+      });
+      const title = document.getElementById('detail-title');
+      const text = document.getElementById('detail-text');
+      const body = document.getElementById('detail-body');
+      if (!selected) {
+        title.textContent = '选择一个模块';
+        text.textContent = '点击图中的节点，查看它在一次请求中的职责、调用者和下游模块。';
+        text.className = 'empty'; body.innerHTML = '';
+        return;
+      }
+      const n = nodeMap[selected];
+      const callers = edges.filter(e => e[1] === selected).map(e => nodeMap[e[0]].title);
+      const callees = edges.filter(e => e[0] === selected).map(e => nodeMap[e[1]].title);
+      title.textContent = n.title;
+      text.textContent = n.desc; text.className = '';
+      body.innerHTML = `<h3>源码位置</h3><code>${n.file}</code><h3>上游调用者</h3><p>${callers.length ? callers.join('、') : '无'}</p><h3>下游模块</h3><p>${callees.length ? callees.join('、') : '无'}</p>`;
+    }
+
+    document.querySelectorAll('.filter').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('.filter').forEach(el => el.classList.remove('active'));
+      button.classList.add('active'); activeFilter = button.dataset.filter; applyVisibility();
+    }));
+    document.getElementById('search').addEventListener('input', event => {
+      searchTerm = event.target.value.trim().toLowerCase(); applyVisibility();
+    });
+    document.getElementById('reset').addEventListener('click', () => {
+      selected = null; activeFilter = 'all'; searchTerm = '';
+      document.getElementById('search').value = '';
+      document.querySelectorAll('.filter').forEach(el => el.classList.toggle('active', el.dataset.filter === 'all'));
+      selectNode(null); applyVisibility();
+    });
+
+    drawEdges(); drawNodes(); applyVisibility();
+  </script>
+</body>
+</html>

@@ -11,6 +11,13 @@ import {
 } from "../session-memory/session-memory.js";
 import { restoreReadFileStateAfterAutoCompress } from "./read-file-restore.js";
 import { restoreInvokedSkillsAfterAutoCompress } from "./invoked-skill-restore.js";
+import {
+  appendRuntimeContextMessages,
+  createPlanFileContextMessages,
+  loadBackgroundTaskContextAfterAutoCompress,
+  loadUnclaimedAgentTaskContextAfterAutoCompress,
+} from "../query/runtime-context.js";
+import { restorePlan } from "../plan/persistence.js";
 import type { DeepSeekCreateRequest } from "../deepseek/types.js";
 import type {
   AutoCompressState,
@@ -172,6 +179,13 @@ async function restorePostAutoCompressContext(
     summaryId,
     preservedMessages,
   );
+  await restorePlan(runtime, state);
+  appendRuntimeContextMessages(
+    state,
+    createPlanFileContextMessages(state),
+  );
+  loadUnclaimedAgentTaskContextAfterAutoCompress(runtime, state);
+  loadBackgroundTaskContextAfterAutoCompress(runtime, state);
 }
 
 function resetProjectionCompressionStateAfterAutoCompress(
@@ -184,6 +198,8 @@ function resetProjectionCompressionStateAfterAutoCompress(
     preservedMessages,
   );
   runtime.toolResultBudgetState = state.toolResultBudgetState;
+  state.longTermMemory.surfacedFiles = {};
+  state.longTermMemory.surfacedBytes = 0;
 }
 
 function preserveRecentToolResultBudgetState(
@@ -387,6 +403,7 @@ async function summarizeLocalCompactMessages(
   );
   const response = await runtime.deepSeekClient.create({
     model: runtime.deepSeekRuntimeConfig.model as DeepSeekCreateRequest["model"],
+    user_id: runtime.deepSeekRuntimeConfig.userId,
     messages: [
       {
         role: "system",

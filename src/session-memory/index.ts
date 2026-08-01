@@ -2,7 +2,6 @@ export {
   buildSessionMemoryUpdatePrompt,
   DEFAULT_SESSION_MEMORY_TEMPLATE,
   isSessionMemoryEmpty,
-  SESSION_MEMORY_SYSTEM_PROMPT,
   truncateSessionMemoryForCompact,
 } from "./prompts.js";
 export {

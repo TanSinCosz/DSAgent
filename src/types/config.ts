@@ -9,6 +9,8 @@ export interface DeepSeekRuntimeSettings {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  /** DeepSeek business user identity used for scheduling and KV-cache isolation. */
+  userId?: string;
   model: string;
   maxTokens: number;
   systemPrompt?: string;

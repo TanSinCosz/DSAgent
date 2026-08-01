@@ -8,6 +8,7 @@ import { closeMcpConnections } from "./mcp/index.js";
 import { formatErrorForUser } from "./deepseek/errors.js";
 import { createToolsWithConfiguredMcp } from "./mcp/config.js";
 import { query } from "./query.js";
+import { drainPendingLongTermMemoryExtractions } from "./query/long-term-memory.js";
 import { recordTranscriptMessage } from "./transcript/persistence.js";
 import { createMessage } from "./types/messages.js";
 import { createRuntime } from "./types/runtime.js";
@@ -63,6 +64,7 @@ export async function runCli(args: string[]): Promise<void> {
       await runUserPrompt(prompt, runtime, state);
     }
   } finally {
+    await drainPendingLongTermMemoryExtractions(runtime);
     closeMcpConnections(runtime.mcpConnections);
     readline.close();
   }

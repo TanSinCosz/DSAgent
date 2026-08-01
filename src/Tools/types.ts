@@ -33,15 +33,6 @@ export interface JSONSchemaObject {
 }
 
 
-export interface BackgroundTask {
-    id: string
-    command: string
-    status: 'running' | 'completed' | 'failed' | 'killed'
-    stdout: string
-    stderr: string
-    exitCode?: number
-}
-
 export interface Tool<
     TInput = Record<string, unknown>,
     TOutput = ToolExecutionValue,
@@ -203,7 +194,7 @@ export type Tools = readonly Tool[]
 export type ToolPermissionDecision =
     | { behavior: "allow"; updatedInput?: unknown }
     | { behavior: "deny"; message: string };
-
+ 
 export type CanUseToolFn = (
     tool: Tool,
     input: unknown,

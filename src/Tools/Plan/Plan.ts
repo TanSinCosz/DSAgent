@@ -3,6 +3,7 @@ import type { z } from "zod";
 import { recordTranscriptStateSnapshot } from "../../transcript/persistence.js";
 import type { Runtime } from "../../types/runtime.js";
 import type { State } from "../../types/state.js";
+import { persistPlan } from "../../plan/persistence.js";
 import type { Tool, ToolUseContext } from "../types.js";
 import {
   DESCRIPTION,
@@ -53,6 +54,10 @@ export class Plan
     const oldMode = state.mode;
     const newMode = input.action === "enter" ? "plan" : "default";
     const plan = input.plan?.trim();
+
+    if (plan) {
+      await persistPlan(runtime, state, plan);
+    }
 
     state.mode = newMode;
     runtime.toolUseContext.setAppState((previous) => ({

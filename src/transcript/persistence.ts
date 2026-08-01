@@ -10,7 +10,12 @@ import type {
   AgentTask,
   AgentTasksState,
 } from "../Tools/Agent/state.js";
-
+import {
+  markRestoredBackgroundTasksDetached,
+  type BackgroundTask,
+  type BackgroundTaskNotification,
+  type BackgroundTasksState,
+} from "../Tools/Bash/state.js";
 const TRANSCRIPT_STORE_VERSION = 1;
 const TRANSCRIPT_DIR = ".opencat/transcripts";
 const MAX_PERSISTED_AGENT_PROMPT_CHARS = 2_000;
@@ -19,11 +24,17 @@ const MAX_PERSISTED_NOTIFICATION_MESSAGE_CHARS = 8_000;
 const MAX_PERSISTED_INVOKED_SKILLS = 5;
 const MAX_PERSISTED_INVOKED_SKILL_CHARS = 16_000;
 const MAX_PERSISTED_INVOKED_SKILLS_TOTAL_CHARS = 48_000;
+const MAX_PERSISTED_BACKGROUND_TASKS = 100;
+const MAX_PERSISTED_BACKGROUND_NOTIFICATIONS = 100;
+const MAX_PERSISTED_BACKGROUND_COMMAND_CHARS = 2_000;
 
 export type TranscriptSnapshotReason =
   | "agent_notification"
+  | "agent_task"
+  | "background_task"
   | "auto_compress"
   | "history_snip"
+  | "long_term_memory"
   | "manual"
   | "mode"
   | "projection"
@@ -54,8 +65,11 @@ export type PersistedStateSnapshot = {
   toolResultBudgetState?: PersistedToolResultBudgetState;
   sessionMemory?: SessionMemoryState;
   mode?: State["mode"];
+  plan?: State["plan"];
   agentTasks?: AgentTasksState;
   agentNotifications?: AgentNotification[];
+  backgroundTasks?: BackgroundTasksState;
+  backgroundTaskNotifications?: BackgroundTaskNotification[];
   /**
    * Deprecated. Runtime context is per-request projection data and should not
    * be written into new snapshots. Kept optional so older transcripts hydrate.
@@ -63,6 +77,7 @@ export type PersistedStateSnapshot = {
   runtimeContextMessages?: Message[];
   invokedSkills?: State["invokedSkills"];
   todos?: State["todos"];
+  longTermMemory?: State["longTermMemory"];
   messageCount: number;
   latestMessageId?: MessageId;
 };
@@ -233,8 +248,15 @@ export async function loadStateFromTranscript(
     mode: latestSnapshot?.mode,
     agentTasks: latestSnapshot?.agentTasks,
     agentNotifications: latestSnapshot?.agentNotifications,
+    backgroundTasks: markRestoredBackgroundTasksDetached(
+      latestSnapshot?.backgroundTasks ?? {},
+    ),
+    backgroundTaskNotifications:
+      latestSnapshot?.backgroundTaskNotifications,
+    plan: latestSnapshot?.plan,
     invokedSkills: latestSnapshot?.invokedSkills,
     todos: latestSnapshot?.todos,
+    longTermMemory: latestSnapshot?.longTermMemory,
   });
 }
 
@@ -272,6 +294,15 @@ function createPersistedStateSnapshot(
       );
       snapshot.sessionMemory = state.sessionMemory;
       snapshot.invokedSkills = persistInvokedSkills(state.invokedSkills);
+      snapshot.plan = state.plan;
+      snapshot.longTermMemory = state.longTermMemory;
+      snapshot.backgroundTasks = persistBackgroundTasks(
+        state.backgroundTasks,
+      );
+      snapshot.backgroundTaskNotifications =
+        persistBackgroundTaskNotifications(
+          state.backgroundTaskNotifications,
+        );
       return snapshot;
     case "history_snip":
       snapshot.historySnips = state.historySnips;
@@ -282,16 +313,46 @@ function createPersistedStateSnapshot(
       );
       return snapshot;
     case "runtime_context":
+      snapshot.longTermMemory = state.longTermMemory;
+      snapshot.agentNotifications = persistAgentNotifications(
+        state.agentNotifications,
+      );
+      snapshot.agentTasks = persistAgentTasks(state.agentTasks);
+      snapshot.backgroundTasks = persistBackgroundTasks(
+        state.backgroundTasks,
+      );
+      snapshot.backgroundTaskNotifications =
+        persistBackgroundTaskNotifications(
+          state.backgroundTaskNotifications,
+        );
+      return snapshot;
+    case "long_term_memory":
+      snapshot.longTermMemory = state.longTermMemory;
+      return snapshot;
     case "agent_notification":
       snapshot.agentNotifications = persistAgentNotifications(
         state.agentNotifications,
       );
+      snapshot.agentTasks = persistAgentTasks(state.agentTasks);
+      return snapshot;
+    case "agent_task":
+      snapshot.agentTasks = persistAgentTasks(state.agentTasks);
+      return snapshot;
+    case "background_task":
+      snapshot.backgroundTasks = persistBackgroundTasks(
+        state.backgroundTasks,
+      );
+      snapshot.backgroundTaskNotifications =
+        persistBackgroundTaskNotifications(
+          state.backgroundTaskNotifications,
+        );
       return snapshot;
     case "session_memory":
       snapshot.sessionMemory = state.sessionMemory;
       return snapshot;
     case "mode":
       snapshot.mode = state.mode;
+      snapshot.plan = state.plan;
       return snapshot;
     case "todo":
       snapshot.todos = state.todos;
@@ -305,12 +366,21 @@ function createPersistedStateSnapshot(
       );
       snapshot.sessionMemory = state.sessionMemory;
       snapshot.mode = state.mode;
+      snapshot.plan = state.plan;
       snapshot.agentTasks = persistAgentTasks(state.agentTasks);
       snapshot.agentNotifications = persistAgentNotifications(
         state.agentNotifications,
       );
+      snapshot.backgroundTasks = persistBackgroundTasks(
+        state.backgroundTasks,
+      );
+      snapshot.backgroundTaskNotifications =
+        persistBackgroundTaskNotifications(
+          state.backgroundTaskNotifications,
+        );
       snapshot.invokedSkills = persistInvokedSkills(state.invokedSkills);
       snapshot.todos = state.todos;
+      snapshot.longTermMemory = state.longTermMemory;
       return snapshot;
   }
 }
@@ -340,6 +410,46 @@ function persistAgentTask(task: AgentTask): AgentTask {
       limitString(message, MAX_PERSISTED_NOTIFICATION_MESSAGE_CHARS)
     ),
   };
+}
+
+function persistBackgroundTasks(
+  tasks: BackgroundTasksState,
+): BackgroundTasksState {
+  const entries = Object.entries(tasks)
+    .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_PERSISTED_BACKGROUND_TASKS);
+
+  return Object.fromEntries(
+    entries.map(([id, task]) => [id, persistBackgroundTask(task)]),
+  );
+}
+
+function persistBackgroundTask(task: BackgroundTask): BackgroundTask {
+  return {
+    ...task,
+    command: limitString(
+      task.command,
+      MAX_PERSISTED_BACKGROUND_COMMAND_CHARS,
+    ),
+    description: limitString(
+      task.description,
+      MAX_PERSISTED_BACKGROUND_COMMAND_CHARS,
+    ),
+  };
+}
+
+function persistBackgroundTaskNotifications(
+  notifications: readonly BackgroundTaskNotification[],
+): BackgroundTaskNotification[] {
+  return notifications
+    .slice(-MAX_PERSISTED_BACKGROUND_NOTIFICATIONS)
+    .map((notification) => ({
+      ...notification,
+      message: limitString(
+        notification.message,
+        MAX_PERSISTED_NOTIFICATION_MESSAGE_CHARS,
+      ),
+    }));
 }
 
 function persistAgentNotifications(
@@ -449,11 +559,21 @@ function mergePersistedStateSnapshots(
     if (snapshot.mode !== undefined) {
       merged.mode = snapshot.mode;
     }
+    if (snapshot.plan !== undefined) {
+      merged.plan = snapshot.plan;
+    }
     if (snapshot.agentTasks !== undefined) {
       merged.agentTasks = snapshot.agentTasks;
     }
     if (snapshot.agentNotifications !== undefined) {
       merged.agentNotifications = snapshot.agentNotifications;
+    }
+    if (snapshot.backgroundTasks !== undefined) {
+      merged.backgroundTasks = snapshot.backgroundTasks;
+    }
+    if (snapshot.backgroundTaskNotifications !== undefined) {
+      merged.backgroundTaskNotifications =
+        snapshot.backgroundTaskNotifications;
     }
     if (snapshot.runtimeContextMessages !== undefined) {
       merged.runtimeContextMessages = snapshot.runtimeContextMessages;
@@ -463,6 +583,9 @@ function mergePersistedStateSnapshots(
     }
     if (snapshot.todos !== undefined) {
       merged.todos = snapshot.todos;
+    }
+    if (snapshot.longTermMemory !== undefined) {
+      merged.longTermMemory = snapshot.longTermMemory;
     }
   }
 

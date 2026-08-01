@@ -32,6 +32,7 @@ import {
   resolveAgentTools,
   type ResolvedAgentTools,
 } from "./tool-policy.js";
+import { killBackgroundTasksForAgent } from "../Bash/background.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,6 +84,17 @@ export type RunAgentOptions = {
   readFileState?: FileStateCache;
   agentRole?: RuntimeAgentRole;
   forkContextMessages?: readonly Message[];
+  /**
+   * Append the task prompt directly after the inherited parent context.
+   * Internal cache-safe tasks can use this when their task prompt is the
+   * complete source of behavioral instructions.
+   */
+  useGenericForkPrompt?: boolean;
+  /**
+   * Stop after the named tool succeeds and its complete turn is persisted.
+   * This is useful for internal one-shot agents such as session memory.
+   */
+  stopAfterSuccessfulToolNames?: readonly string[];
 };
 
 type AgentWorktreeSession = {
@@ -112,7 +124,7 @@ async function launchAsyncAgent(options: RunAgentOptions): Promise<AgentAsyncLau
   const worktree = await prepareAgentWorktreeIfNeeded(options, agentId);
   const outputFile = getAgentOutputFile(agentId);
 
-  registerAgentTask(options, agentId, "async", outputFile, worktree);
+  await registerAgentTask(options, agentId, "async", outputFile, worktree);
 
   void runAgentSynchronously({
     ...options,
@@ -160,7 +172,7 @@ async function runAgentSynchronously(
   const shouldRecordLifecycle = options.recordTaskLifecycle ?? true;
 
   if (shouldRecordLifecycle) {
-    registerAgentTask(options, agentId, options.mode, undefined, worktree);
+    await registerAgentTask(options, agentId, options.mode, undefined, worktree);
   }
 
   const resolvedAgentTools = resolveAgentTools(
@@ -177,7 +189,6 @@ async function runAgentSynchronously(
   );
   const childState = createChildAgentState(
     options,
-    agentId,
     worktree,
     agentToolPolicyPrompt,
   );
@@ -203,6 +214,9 @@ async function runAgentSynchronously(
   let result = "";
   let finalizedWorktree: FinalizedWorktree = worktreeToOutput(worktree);
   const startedAt = Date.now();
+  const hasExactParentRequestContext =
+    options.forkContextMessages !== undefined ||
+    options.parentRuntime.lastModelRequestContextMessages !== undefined;
 
   await emitRunEvent(options.parentRuntime, {
     type: "agent_started",
@@ -216,11 +230,38 @@ async function runAgentSynchronously(
   });
 
   try {
+    const stopAfterSuccessfulToolNames = new Set(
+      options.stopAfterSuccessfulToolNames ?? [],
+    );
+    let targetToolSucceededThisTurn = false;
+    let targetToolFailedThisTurn = false;
+
     for await (const event of query(childRuntime, childState, {
       maxTurns: options.maxTurns ?? options.agentDefinition.maxTurns ?? 100,
+      skipRequestContextMaterialization:
+        options.mode === "fork" && hasExactParentRequestContext,
+      usePreprojectedMessagesOnFirstTurn:
+        options.mode === "fork" && hasExactParentRequestContext,
     })) {
       if (event.type === "assistant_message" && event.message.content) {
         result = event.message.content;
+      }
+      if (
+        event.type === "tool_result" &&
+        stopAfterSuccessfulToolNames.has(event.toolCall.function.name)
+      ) {
+        if (event.succeeded) {
+          targetToolSucceededThisTurn = true;
+        } else {
+          targetToolFailedThisTurn = true;
+        }
+      }
+      if (event.type === "turn_end") {
+        if (targetToolSucceededThisTurn && !targetToolFailedThisTurn) {
+          break;
+        }
+        targetToolSucceededThisTurn = false;
+        targetToolFailedThisTurn = false;
       }
     }
 
@@ -276,6 +317,12 @@ async function runAgentSynchronously(
     });
 
     throw error;
+  } finally {
+    await killBackgroundTasksForAgent(
+      childRuntime.sessionId,
+      childRuntime.agentId,
+      childState,
+    );
   }
 }
 
@@ -290,6 +337,7 @@ function buildInitialMessages(
 
   if (options.mode === "fork") {
     const contextMessages = options.forkContextMessages ??
+      options.parentRuntime.lastModelRequestContextMessages ??
       options.parentState.Messages;
 
     return [
@@ -298,8 +346,11 @@ function buildInitialMessages(
       ),
       createMessage({
         role: "user",
-        content:
-          `${worktreeNotice}${buildForkDirective(options.prompt, agentToolPolicyPrompt)}`,
+        content: `${worktreeNotice}${
+          options.useGenericForkPrompt === false
+            ? options.prompt
+            : buildForkDirective(options, agentToolPolicyPrompt)
+        }`,
       }, { source: "agent_message" }),
     ];
   }
@@ -314,37 +365,22 @@ function buildInitialMessages(
 
 function createChildAgentState(
   options: RunAgentOptions,
-  agentId: SubAgentId,
   worktree: AgentWorktreeSession | undefined,
   agentToolPolicyPrompt: string,
 ): State {
   const messages = buildInitialMessages(options, worktree, agentToolPolicyPrompt);
 
-  if (options.mode === "fork") {
-    return createState({
-      messages,
-      runtimeContextMessages: cloneMessages(options.parentState.runtimeContextMessages),
-      autoCompress: cloneAutoCompressState(options.parentState.autoCompress),
-      sessionMemory: cloneSessionMemoryState(options.parentState.sessionMemory),
-      invokedSkills: cloneInvokedSkillsForFork(
-        options.parentState.invokedSkills,
-        options.parentRuntime.agentId,
-        agentId,
-      ),
-      todos: cloneTodosForFork(
-        options.parentState.todos,
-        options.parentRuntime.agentId,
-        agentId,
-      ),
-      mode: options.parentState.mode,
-      agentTasks: options.parentState.agentTasks,
-    });
-  }
-
+  // Match the official subagent boundary: inherit the model-visible message
+  // prefix, but start with fresh agent-owned mutable state. Task registries are
+  // explicit supervisor channels and remain shared so messages and background
+  // process lifecycle updates can reach the owning agent.
   return createState({
     messages,
     mode: options.agentDefinition.permissionMode === "plan" ? "plan" : "default",
     agentTasks: options.parentState.agentTasks,
+    backgroundTasks: options.parentState.backgroundTasks,
+    backgroundTaskNotifications:
+      options.parentState.backgroundTaskNotifications,
   });
 }
 
@@ -398,52 +434,6 @@ function filterIncompleteToolCallMessages(
   });
 }
 
-function cloneInvokedSkillsForFork(
-  skills: readonly State["invokedSkills"][number][],
-  parentAgentId: string,
-  childAgentId: string,
-): State["invokedSkills"] {
-  return skills.map((skill) => ({
-    ...skill,
-    agentId: skill.agentId === parentAgentId ? childAgentId : skill.agentId,
-  }));
-}
-
-function cloneAutoCompressState(state: State["autoCompress"]): State["autoCompress"] {
-  return {
-    ...state,
-    summaries: state.summaries.map((summary) => ({ ...summary })),
-  };
-}
-
-function cloneTodosForFork(
-  todos: State["todos"],
-  parentAgentId: string,
-  childAgentId: string,
-): State["todos"] {
-  const cloned = Object.fromEntries(
-    Object.entries(todos).map(([agentId, items]) => [
-      agentId,
-      items.map((item) => ({ ...item })),
-    ]),
-  );
-
-  if (todos[parentAgentId] && !cloned[childAgentId]) {
-    cloned[childAgentId] = todos[parentAgentId].map((item) => ({ ...item }));
-  }
-
-  return cloned;
-}
-
-function cloneSessionMemoryState(
-  state: State["sessionMemory"],
-): State["sessionMemory"] {
-  return {
-    ...state,
-    config: { ...state.config },
-  };
-}
-
 function createChildAgentRuntime(
   options: RunAgentOptions,
   childState: State,
@@ -452,9 +442,12 @@ function createChildAgentRuntime(
   resolvedAgentTools: ResolvedAgentTools,
 ): Runtime {
   const parent = options.parentRuntime;
-  const childTools = resolvedAgentTools.resolvedTools;
+  const childTools = options.mode === "fork"
+    ? parent.tools
+    : resolvedAgentTools.resolvedTools;
+  const canUseTool = createChildCanUseTool(options, resolvedAgentTools);
 
-  return createRuntime({
+  const childRuntime = createRuntime({
     sessionId: parent.sessionId,
     agentId,
     agentRole: options.agentRole ?? "subagent",
@@ -463,14 +456,18 @@ function createChildAgentRuntime(
     cwd: worktree?.worktreePath ?? parent.cwd,
     deepSeekRuntimeConfig: {
       ...parent.deepSeekRuntimeConfig,
-      model: resolveAgentModel(
-        options.agentDefinition.model,
-        parent.deepSeekRuntimeConfig.model,
-      ),
+      model: options.mode === "fork"
+        ? parent.deepSeekRuntimeConfig.model
+        : resolveAgentModel(
+          options.agentDefinition.model,
+          parent.deepSeekRuntimeConfig.model,
+        ),
     },
     deepSeekClient: parent.deepSeekClient,
     contextProjectionState: parent.contextProjectionState,
     toolResultBudgetState: parent.toolResultBudgetState,
+    contextCompressionConfig: parent.contextCompressionConfig,
+    enforceCanUseToolBeforeTemporaryRules: options.mode === "fork",
     MemoryConfig: parent.MemoryConfig,
     longTermMemory: parent.longTermMemory,
     longTermMemoryConfig: {
@@ -487,12 +484,54 @@ function createChildAgentRuntime(
     thinkingConfig: parent.toolUseContext.options.thinkingConfig,
     appState: deriveChildAppState(options),
     systemPrompt: options.mode === "fork" ? parent.systemPrompt : undefined,
+    systemContext: options.mode === "fork" ? parent.systemContext : undefined,
+    userContext: options.mode === "fork" ? parent.userContext : undefined,
     readFileState: options.readFileState ??
       (options.mode === "fork" && !worktree
         ? cloneFileStateCache(parent.toolUseContext.readFileState)
         : undefined),
-    canUseTool: options.canUseTool,
+    canUseTool,
   });
+
+  childRuntime.lastModelRequestContextMessages =
+    options.mode === "fork"
+      ? cloneMessages(
+        options.forkContextMessages ??
+          parent.lastModelRequestContextMessages ??
+          options.parentState.Messages,
+      )
+      : undefined;
+
+  return childRuntime;
+}
+
+function createChildCanUseTool(
+  options: RunAgentOptions,
+  resolvedAgentTools: ResolvedAgentTools,
+): CanUseToolFn | undefined {
+  if (options.mode !== "fork" && !options.canUseTool) {
+    return undefined;
+  }
+
+  const allowedToolNames = new Set(
+    resolvedAgentTools.resolvedTools.map((tool) => tool.name),
+  );
+
+  return async (tool, input, context, runtime, state) => {
+    if (!allowedToolNames.has(tool.name)) {
+      return {
+        behavior: "deny",
+        message:
+          `Tool ${tool.name} is outside the allowed tool policy for this agent.`,
+      };
+    }
+
+    if (!options.canUseTool) {
+      return { behavior: "allow" };
+    }
+
+    return options.canUseTool(tool, input, context, runtime, state);
+  };
 }
 
 function deriveChildAppState(options: RunAgentOptions): AppState {
@@ -556,7 +595,26 @@ function resolveAgentModel(
   return agentModel;
 }
 
-function buildForkDirective(prompt: string, agentToolPolicyPrompt: string): string {
+function buildForkDirective(
+  options: RunAgentOptions,
+  agentToolPolicyPrompt: string,
+): string {
+  const agentInstructions = options.agentDefinition.getSystemPrompt().trim();
+  const stopsAfterToolSuccess =
+    (options.stopAfterSuccessfulToolNames?.length ?? 0) > 0;
+  const completionInstructions = stopsAfterToolSuccess
+    ? [
+      "This is a one-shot tool task.",
+      `Complete every required ${options.stopAfterSuccessfulToolNames!.join("/")} call in a single assistant turn whenever possible.`,
+      "After those tool calls succeed, stop. Do not produce a final report or confirmation message.",
+    ].join("\n")
+    : `Output format:
+Scope: <the scope you handled>
+Result: <answer or key findings>
+Key files: <relevant file paths, if any>
+Files changed: <files changed, if any>
+Issues: <only if there are issues to flag>`;
+
   return `<fork_worker>
 STOP. READ THIS FIRST.
 
@@ -575,15 +633,13 @@ list for this child agent:
 
 ${agentToolPolicyPrompt}
 
-Output format:
-Scope: <the scope you handled>
-Result: <answer or key findings>
-Key files: <relevant file paths, if any>
-Files changed: <files changed, if any>
-Issues: <only if there are issues to flag>
+Agent-specific instructions:
+${agentInstructions}
+
+${completionInstructions}
 </fork_worker>
 
-Directive: ${prompt}`;
+Directive: ${options.prompt}`;
 }
 
 function renderAgentToolPolicyPrompt(
@@ -642,13 +698,13 @@ function createAgentId(): SubAgentId {
   return `agent_${randomUUID()}`;
 }
 
-function registerAgentTask(
+async function registerAgentTask(
   options: RunAgentOptions,
   agentId: string,
   mode: AgentExecutionMode,
   outputFile?: string,
   worktree?: AgentWorktreeSession,
-): void {
+): Promise<void> {
   const now = Date.now();
 
   options.parentState.agentTasks[agentId] = {
@@ -664,6 +720,11 @@ function registerAgentTask(
     outputFile,
     ...worktreeToOutput(worktree),
   };
+  await recordTranscriptStateSnapshot(
+    options.parentRuntime,
+    options.parentState,
+    "agent_task",
+  );
 }
 
 async function completeAgentTask(
@@ -794,6 +855,14 @@ function buildAgentNotificationMessage(
 
   if (worktree?.changedFiles?.length) {
     lines.push(`changed_files: ${worktree.changedFiles.join(", ")}`);
+  }
+
+  const task = options.parentState.agentTasks[agentId];
+  if (task?.result) {
+    lines.push("result:", task.result.slice(0, 4_000));
+  }
+  if (task?.error) {
+    lines.push("error:", task.error.slice(0, 4_000));
   }
 
   lines.push(`</task-notification>`);

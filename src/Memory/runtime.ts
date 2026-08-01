@@ -40,7 +40,9 @@ export function createLongTermMemoryRuntimeConfig(
     autoExtract: options?.autoExtract ?? false,
     autoInjectTopK: options?.autoInjectTopK ?? 6,
     searchThreshold: options?.searchThreshold ?? 0.1,
-    maxInjectedChars: options?.maxInjectedChars ?? 8_000,
+    // MEMORY.md alone may contain up to 25K characters. Leave room for the
+    // selector to attach a small set of relevant topic files as well.
+    maxInjectedChars: options?.maxInjectedChars ?? 40_000,
     fileMemoryDirectory: options?.fileMemoryDirectory ??
       process.env.OPENCAT_FILE_MEMORY_DIR,
     userId: options?.userId ?? process.env.OPENCAT_MEMORY_USER_ID ?? "default-user",

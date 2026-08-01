@@ -30,9 +30,7 @@ For commands that are harder to parse at a glance (long flags, package-script ar
 // field set by SedEditPermissionRequest after the user approves a sed edit preview.
 // Exposing it in the schema would let the model bypass permission checks and the
 // sandbox by pairing an innocuous command with an arbitrary file write.
-// Also conditionally remove run_in_background when background tasks are disabled.
 export const inputSchema = lazySchema(() => fullInputSchema().omit({
-    run_in_background: true,
     _simulatedSedEdit: true
 }));
 
@@ -43,6 +41,8 @@ export const outputSchema = lazySchema(() => z.object({
     interrupted: z.boolean().describe("Whether the command was interrupted"),
     isImage: z.boolean().optional().describe("Flag to indicate if stdout contains image data"),
     backgroundTaskId: z.string().optional().describe("ID of the background task if command is running in background"),
+    backgroundTaskStatus: z.enum(["running", "completed", "failed", "killed"]).optional().describe("Current managed background task status"),
+    backgroundOutputPath: z.string().optional().describe("Path to the managed background task output file"),
     backgroundedByUser: z.boolean().optional().describe("True if the user manually backgrounded the command with Ctrl+B"),
     assistantAutoBackgrounded: z.boolean().optional().describe("True if assistant-mode auto-backgrounded a long-running blocking command"),
     dangerouslyDisableSandbox: z.boolean().optional().describe("Flag to indicate if sandbox mode was overridden"),

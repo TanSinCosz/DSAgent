@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const preparedRepoCaches = new Set<string>();
+const repoCachePreparationLocks = new Map<string, Promise<string>>();
 
 export type SweWorkspaceStatusValue =
   | "missing"
@@ -26,6 +27,8 @@ export interface SweWorkspaceOptions {
   reposDir?: string;
   allowNetworkClone?: boolean;
   projectRoot?: string;
+  /** Separates worktrees created for different evaluation datasets. */
+  workspaceNamespace?: string;
 }
 
 export interface SweWorkspaceStatus {
@@ -46,14 +49,45 @@ export interface SweWorkspaceMeta {
   updatedAt: string;
 }
 
-export function createSweBenchSessionId(instanceId: string): string {
-  return `session_swe_${instanceId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+export interface SweBenchSessionInfo {
+  instanceId: string;
+  workspaceNamespace?: string;
+}
+
+export function createSweBenchSessionId(
+  instanceId: string,
+  workspaceNamespace?: string,
+): string {
+  const safeInstanceId = sanitizePathSegment(instanceId);
+  const safeNamespace = workspaceNamespace
+    ? sanitizePathSegment(workspaceNamespace)
+    : "";
+  return safeNamespace
+    ? `session_swe_${safeNamespace}___${safeInstanceId}`
+    : `session_swe_${safeInstanceId}`;
+}
+
+export function parseSweBenchSessionInfo(
+  sessionId: string,
+): SweBenchSessionInfo | undefined {
+  if (!sessionId.startsWith("session_swe_")) {
+    return undefined;
+  }
+
+  const value = sessionId.slice("session_swe_".length);
+  const separator = value.indexOf("___");
+  if (separator >= 0) {
+    return {
+      workspaceNamespace: value.slice(0, separator),
+      instanceId: value.slice(separator + 3),
+    };
+  }
+
+  return { instanceId: value };
 }
 
 export function parseSweBenchSessionId(sessionId: string): string | undefined {
-  return sessionId.startsWith("session_swe_")
-    ? sessionId.slice("session_swe_".length)
-    : undefined;
+  return parseSweBenchSessionInfo(sessionId)?.instanceId;
 }
 
 export function getSweWorkspacePath(
@@ -61,8 +95,12 @@ export function getSweWorkspacePath(
   options: SweWorkspaceOptions = {},
 ): string {
   const safeInstanceId = sanitizePathSegment(instanceId);
+  const namespace = options.workspaceNamespace?.trim();
+  const workspaceRoot = namespace
+    ? path.join(resolveSweWorkspaceRoot(options), sanitizePathSegment(namespace))
+    : resolveSweWorkspaceRoot(options);
   return path.join(
-    resolveSweWorkspaceRoot(options),
+    workspaceRoot,
     safeInstanceId,
     `repo-${safeInstanceId}`,
   );
@@ -155,6 +193,10 @@ async function resolveExistingSweWorkspacePath(
     return preferred;
   }
 
+  if (options.workspaceNamespace?.trim()) {
+    return preferred;
+  }
+
   const legacy = getLegacySweWorkspacePath(instanceId, options);
   return await isDirectory(legacy) ? legacy : preferred;
 }
@@ -214,7 +256,7 @@ export async function prepareSweWorkspace(
       worktreePath,
       instance.base_commit,
     ]);
-    await writeSweWorkspaceMeta(instance, repoCachePath, worktreePath);
+    await writeSweWorkspaceMeta(instance, repoCachePath, worktreePath, options);
     return await getSweWorkspaceStatus(instance, options);
   } catch (error) {
     return {
@@ -227,6 +269,27 @@ export async function prepareSweWorkspace(
 }
 
 async function ensureSweRepoCache(
+  repo: string,
+  baseCommit: string,
+  options: SweWorkspaceOptions,
+): Promise<string> {
+  const repoCachePath = getSweRepoCachePath(repo, options);
+  const existingPreparation = repoCachePreparationLocks.get(repoCachePath);
+  if (existingPreparation) {
+    return existingPreparation;
+  }
+
+  const preparation = prepareSweRepoCache(repo, baseCommit, options);
+  repoCachePreparationLocks.set(repoCachePath, preparation);
+  try {
+    return await preparation;
+  } catch (error) {
+    repoCachePreparationLocks.delete(repoCachePath);
+    throw error;
+  }
+}
+
+async function prepareSweRepoCache(
   repo: string,
   baseCommit: string,
   options: SweWorkspaceOptions,
@@ -309,6 +372,7 @@ async function writeSweWorkspaceMeta(
   instance: SweInstance,
   repoCachePath: string,
   worktreePath: string,
+  options: SweWorkspaceOptions,
 ): Promise<void> {
   const now = new Date().toISOString();
   const metaPath = path.join(path.dirname(worktreePath), "meta.json");
@@ -319,7 +383,10 @@ async function writeSweWorkspaceMeta(
     baseCommit: instance.base_commit,
     repoCachePath,
     worktreePath,
-    sessionId: createSweBenchSessionId(instance.instance_id),
+    sessionId: createSweBenchSessionId(
+      instance.instance_id,
+      options.workspaceNamespace,
+    ),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };

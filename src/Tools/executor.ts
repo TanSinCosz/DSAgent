@@ -4,9 +4,11 @@ import type { PersistedToolResult } from "../types/messages.js";
 import type { Runtime } from "../types/runtime.js";
 import type { State } from "../types/state.js";
 import type { Tool, Tools } from "./types.js";
+import { runWithCwdOverride } from "./utils/cwd.js";
 
 export type ToolCallExecutionResult = {
   message: DeepSeekMessage;
+  succeeded: boolean;
   persistedToolResult?: PersistedToolResult;
   permissionDenied?: {
     reason: string;
@@ -42,65 +44,72 @@ export async function executeToolCallWithMetadata(
         toolCall.id,
         renderUnavailableToolMessage(toolCall.function.name, tools, runtime),
       ),
+      succeeded: false,
     };
   }
 
-  try {
-    const parsedInput = parseToolArguments(toolCall.function.arguments);
-    const validation = validateToolInput(tool, parsedInput);
+  return runWithCwdOverride(runtime.cwd, async () => {
+    try {
+      const parsedInput = parseToolArguments(toolCall.function.arguments);
+      const validation = validateToolInput(tool, parsedInput);
 
-    if (validation.ok === false) {
-      return {
-        message: createToolResultMessage(toolCall.id, validation.error),
-      };
-    }
+      if (validation.ok === false) {
+        return {
+          message: createToolResultMessage(toolCall.id, validation.error),
+          succeeded: false,
+        };
+      }
 
-    const permittedInput = await applyToolPermission(
-      tool,
-      validation.input,
-      runtime,
-      state,
-      options,
-    );
-    if (permittedInput.ok === false) {
+      const permittedInput = await applyToolPermission(
+        tool,
+        validation.input,
+        runtime,
+        state,
+        options,
+      );
+      if (permittedInput.ok === false) {
+        return {
+          message: createToolResultMessage(
+            toolCall.id,
+            `Permission denied for tool ${tool.name}: ${permittedInput.error}`,
+          ),
+          permissionDenied: {
+            reason: permittedInput.error,
+          },
+          succeeded: false,
+        };
+      }
+
+      const output = await tool.call(
+        permittedInput.input as Record<string, unknown>,
+        runtime.toolUseContext,
+        runtime,
+        state,
+      );
+      const result = await maybePersistToolResultContent({
+        runtime,
+        toolCallId: toolCall.id,
+        toolName: tool.name,
+        content: formatToolResult(tool, output),
+        maxResultSizeChars: tool.maxResultSizeChars,
+      });
       return {
         message: createToolResultMessage(
           toolCall.id,
-          `Permission denied for tool ${tool.name}: ${permittedInput.error}`,
+          result.content,
         ),
-        permissionDenied: {
-          reason: permittedInput.error,
-        },
+        succeeded: true,
+        ...(result.persistedToolResult
+          ? { persistedToolResult: result.persistedToolResult }
+          : {}),
+      };
+    } catch (error) {
+      return {
+        message: createToolResultMessage(toolCall.id, stringifyError(error)),
+        succeeded: false,
       };
     }
-
-    const output = await tool.call(
-      permittedInput.input as Record<string, unknown>,
-      runtime.toolUseContext,
-      runtime,
-      state,
-    );
-    const result = await maybePersistToolResultContent({
-      runtime,
-      toolCallId: toolCall.id,
-      toolName: tool.name,
-      content: formatToolResult(tool, output),
-      maxResultSizeChars: tool.maxResultSizeChars,
-    });
-    return {
-      message: createToolResultMessage(
-        toolCall.id,
-        result.content,
-      ),
-      ...(result.persistedToolResult
-        ? { persistedToolResult: result.persistedToolResult }
-        : {}),
-    };
-  } catch (error) {
-    return {
-      message: createToolResultMessage(toolCall.id, stringifyError(error)),
-    };
-  }
+  });
 }
 
 export function createPermissionDeniedToolCallResult(
@@ -112,6 +121,7 @@ export function createPermissionDeniedToolCallResult(
       toolCall.id,
       `Permission denied for tool ${toolCall.function.name}: ${reason}`,
     ),
+    succeeded: false,
     permissionDenied: {
       reason,
     },
@@ -133,7 +143,10 @@ async function applyToolPermission(
   }
 
   const canUseTool = runtime.toolUseContext.canUseTool;
-  if (isAllowedByTemporaryCommandRule(tool, runtime)) {
+  if (
+    isAllowedByTemporaryCommandRule(tool, runtime) &&
+    !runtime.enforceCanUseToolBeforeTemporaryRules
+  ) {
     return { ok: true, input };
   }
 
@@ -153,9 +166,10 @@ async function applyToolPermission(
     return { ok: false, error: decision.message };
   }
 
+  const updatedInput = decision.updatedInput ?? input;
   return {
     ok: true,
-    input: decision.updatedInput ?? input,
+    input: updatedInput,
   };
 }
 
@@ -164,6 +178,7 @@ const PLAN_MODE_BLOCKED_TOOLS = new Set([
   "Bash",
   "Edit",
   "MemorySave",
+  "TaskStop",
   "SendMessage",
   "Write",
 ]);

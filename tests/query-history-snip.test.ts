@@ -8,7 +8,50 @@ import { createMessage } from "../src/types/messages.js";
 import { createRuntime } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
 
-test("buildMessagesForQuery drops orphan tool result after content-only snip strips tool calls", async () => {
+test("no-projection benchmark leaves persisted projection state unapplied", async () => {
+  const oldMessage = createMessage({
+    role: "user",
+    content: "old context that should remain visible in the baseline",
+  });
+  const latestMessage = createMessage({
+    role: "user",
+    content: "continue the benchmark",
+  });
+  const state = createState({
+    messages: [oldMessage, latestMessage],
+    historySnips: [{
+      id: "history_snip_benchmark_state",
+      removedMessageIds: [oldMessage.id],
+      contentOnlyMessageIds: [],
+      createdAtMessageId: latestMessage.id,
+      reason: "prompt_budget",
+      createdAt: Date.now(),
+    }],
+  });
+  const runtime = createRuntime({
+    deepSeekRuntimeConfig: {
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      maxTokens: 1024,
+    },
+    MemoryConfig: createMemoryConfig(),
+    contextCompressionConfig: { enableProjection: false },
+    transcriptStore: false,
+    tools: [],
+  });
+
+  const result = await buildMessagesForQuery(runtime, state);
+
+  assert.equal(
+    result.forkContextMessages.some((message) => message.id === oldMessage.id),
+    true,
+  );
+  assert.equal(result.stats.toolResultBudgetReplacementCount, 0);
+  assert.equal(result.stats.bulkyToolCompactCount, 0);
+  assert.equal(result.stats.historySnipCount, 0);
+});
+
+test("buildMessagesForQuery preserves an assistant/tool pair from an old content-only boundary", async () => {
   const assistant = createMessage({
     role: "assistant",
     content: "I will inspect the file first.",
@@ -59,19 +102,16 @@ test("buildMessagesForQuery drops orphan tool result after content-only snip str
 
   const result = await buildMessagesForQuery(runtime, state);
 
-  assert.equal(
-    result.messages.some((message) => message.role === "tool"),
-    false,
-  );
+  assert.equal(result.messages.some((message) => message.role === "tool"), true);
   assert.equal(
     result.messages.some((message) =>
       message.role === "assistant" && (message.tool_calls?.length ?? 0) > 0
     ),
-    false,
+    true,
   );
 });
 
-test("buildMessagesForQuery drops orphan tool result after snip removes tool-call assistant", async () => {
+test("buildMessagesForQuery preserves an assistant/tool pair from an old removed boundary", async () => {
   const assistant = createMessage({
     role: "assistant",
     content: null,
@@ -121,13 +161,16 @@ test("buildMessagesForQuery drops orphan tool result after snip removes tool-cal
 
   const result = await buildMessagesForQuery(runtime, state);
 
+  assert.equal(result.messages.some((message) => message.role === "tool"), true);
   assert.equal(
-    result.messages.some((message) => message.role === "tool"),
-    false,
+    result.messages.some((message) =>
+      message.role === "assistant" && (message.tool_calls?.length ?? 0) > 0
+    ),
+    true,
   );
 });
 
-test("buildMessagesForQuery records durable snip boundaries after bulky compact misses target", async () => {
+test("buildMessagesForQuery does not snip business messages when bulky compact misses target", async () => {
   const originalTargetTokens = process.env.OPENCAT_HISTORY_SNIP_TARGET_TOKENS;
   const originalMinRecent = process.env.OPENCAT_HISTORY_SNIP_MIN_RECENT_MESSAGES;
   const originalBulkyTargetTokens = process.env.OPENCAT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS;
@@ -183,22 +226,24 @@ test("buildMessagesForQuery records durable snip boundaries after bulky compact 
       tools: [],
     });
 
-    // The old tool round is eligible for durable removal after bulky compact
-    // cannot reach the configured context target.
+    // User, assistant, and tool messages remain structurally intact even when
+    // bulky compact cannot reach the configured context target.
     const first = await buildMessagesForQuery(runtime, state);
-    const removedIds = new Set(
-      state.historySnips[0]?.removedMessageIds ?? [],
-    );
 
-    assert.equal(state.historySnips.length, 1);
-    assert.ok(removedIds.has(state.Messages[1]!.id));
-    assert.ok(removedIds.has(state.Messages[2]!.id));
-    assert.doesNotMatch(JSON.stringify(first.messages), /large old tool result/);
+    assert.equal(state.historySnips.length, 0);
+    assert.equal(first.stats.historySnipCount, 0);
+    assert.equal(
+      first.messages.some((message) =>
+        message.role === "assistant" && (message.tool_calls?.length ?? 0) > 0
+      ),
+      true,
+    );
+    assert.ok(first.messages.some((message) => message.role === "tool"));
 
     // Second call reuses the recorded boundary for stable request building.
     await buildMessagesForQuery(runtime, state);
 
-    assert.equal(state.historySnips.length, 1);
+    assert.equal(state.historySnips.length, 0);
   } finally {
     restoreEnv("OPENCAT_HISTORY_SNIP_TARGET_TOKENS", originalTargetTokens);
     restoreEnv("OPENCAT_HISTORY_SNIP_MIN_RECENT_MESSAGES", originalMinRecent);
@@ -278,7 +323,7 @@ test("buildMessagesForQuery does not mark snipped Read cache entries as partial 
   }
 });
 
-test("buildMessagesForQuery persists snip boundaries after bulky compact misses target", async () => {
+test("buildMessagesForQuery keeps business messages after repeated bulky compact misses", async () => {
   const originalTargetTokens = process.env.OPENCAT_HISTORY_SNIP_TARGET_TOKENS;
   const originalMinRecent = process.env.OPENCAT_HISTORY_SNIP_MIN_RECENT_MESSAGES;
   const originalBulkyTargetTokens = process.env.OPENCAT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS;
@@ -339,18 +384,25 @@ test("buildMessagesForQuery persists snip boundaries after bulky compact misses 
 
     const first = await buildMessagesForQuery(runtime, state);
 
-    assert.equal(state.historySnips.length, 1);
-    assert.doesNotMatch(
-      JSON.stringify(first.messages),
-      /large old tool result/,
+    assert.equal(state.historySnips.length, 0);
+    assert.equal(first.stats.historySnipCount, 0);
+    assert.equal(
+      first.messages.some((message) =>
+        message.role === "assistant" && (message.tool_calls?.length ?? 0) > 0
+      ),
+      true,
     );
+    assert.ok(first.messages.some((message) => message.role === "tool"));
 
     const second = await buildMessagesForQuery(runtime, state);
 
-    assert.equal(state.historySnips.length, 1);
-    assert.doesNotMatch(
-      JSON.stringify(second.messages),
-      /large old tool result/,
+    assert.equal(state.historySnips.length, 0);
+    assert.equal(second.stats.historySnipCount, 0);
+    assert.equal(
+      second.messages.some((message) =>
+        message.role === "assistant" && (message.tool_calls?.length ?? 0) > 0
+      ),
+      true,
     );
   } finally {
     restoreEnv("OPENCAT_HISTORY_SNIP_TARGET_TOKENS", originalTargetTokens);
@@ -377,8 +429,6 @@ test("buildMessagesForQuery records durable snip boundaries for old attachment c
     "long_term_memory",
     "file_restore",
     "dynamic_skill",
-    "agent_notification",
-    "agent_message",
   ] as const;
 
   try {
@@ -456,7 +506,7 @@ test("buildMessagesForQuery records durable snip boundaries for old attachment c
   }
 });
 
-test("buildMessagesForQuery keeps old user and assistant text as content-only history", async () => {
+test("buildMessagesForQuery keeps old user and assistant messages intact", async () => {
   const originalTargetTokens = process.env.OPENCAT_HISTORY_SNIP_TARGET_TOKENS;
   const originalMinRecent = process.env.OPENCAT_HISTORY_SNIP_MIN_RECENT_MESSAGES;
   const originalBulkyTargetTokens = process.env.OPENCAT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS;
@@ -525,21 +575,16 @@ test("buildMessagesForQuery keeps old user and assistant text as content-only hi
       message.content === oldAssistant.content
     );
 
-    assert.equal(state.historySnips.length, 1);
-    assert.deepEqual(
-      state.historySnips[0]?.contentOnlyMessageIds,
-      [oldAssistant.id],
-    );
-    assert.ok(state.historySnips[0]?.removedMessageIds.includes(oldTool.id));
+    assert.equal(state.historySnips.length, 0);
     assert.match(serialized, /old user content that should remain visible/);
     assert.match(serialized, /old assistant answer that should remain visible/);
-    assert.doesNotMatch(serialized, /large old tool result/);
+    assert.match(serialized, /<tool-result-compact>/);
     assert.equal(projectedAssistant?.role, "assistant");
-    assert.equal("tool_calls" in (projectedAssistant ?? {}), false);
+    assert.equal(projectedAssistant?.tool_calls?.length, 1);
 
     await buildMessagesForQuery(runtime, state);
 
-    assert.equal(state.historySnips.length, 1);
+    assert.equal(state.historySnips.length, 0);
   } finally {
     restoreEnv("OPENCAT_HISTORY_SNIP_TARGET_TOKENS", originalTargetTokens);
     restoreEnv("OPENCAT_HISTORY_SNIP_MIN_RECENT_MESSAGES", originalMinRecent);
@@ -625,7 +670,7 @@ test("buildMessagesForQuery skips history snip when bulky compact reaches the ta
   }
 });
 
-test("buildMessagesForQuery rolls back new bulky compactions when snip still exceeds cancel threshold", async () => {
+test("buildMessagesForQuery keeps bulky compaction when no snip candidate is removable", async () => {
   const originalHistoryTargetTokens = process.env.OPENCAT_HISTORY_SNIP_TARGET_TOKENS;
   const originalMinRecent = process.env.OPENCAT_HISTORY_SNIP_MIN_RECENT_MESSAGES;
   const originalBulkyTargetTokens = process.env.OPENCAT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS;
@@ -685,9 +730,9 @@ test("buildMessagesForQuery rolls back new bulky compactions when snip still exc
 
     assert.equal(state.historySnips.length, 0);
     assert.equal(result.stats.historySnipCount, 0);
-    assert.equal(state.toolResultBudgetState.seenIds.size, 0);
-    assert.equal(state.toolResultBudgetState.replacements.size, 0);
-    assert.equal(hasCompactedToolResult, false);
+    assert.ok(state.toolResultBudgetState.seenIds.size > 0);
+    assert.ok(state.toolResultBudgetState.replacements.size > 0);
+    assert.equal(hasCompactedToolResult, true);
   } finally {
     restoreEnv("OPENCAT_HISTORY_SNIP_TARGET_TOKENS", originalHistoryTargetTokens);
     restoreEnv("OPENCAT_HISTORY_SNIP_MIN_RECENT_MESSAGES", originalMinRecent);

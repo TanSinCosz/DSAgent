@@ -1,8 +1,11 @@
 import { spawn } from "child_process";
 import { z } from "zod";
 
+import type { Runtime } from "../../types/runtime.js";
+import type { State } from "../../types/state.js";
 import { Tool, ToolUseContext } from "../types.js";
 import { getCwd } from "../utils/cwd.js";
+import { startBackgroundBashTask } from "./background.js";
 import { BASH_TOOL_NAME, DESCRIPTION, getMaxTimeoutMs, getSimplePrompt } from "./prompt.js";
 import { inputSchema, outputSchema } from "./type.js";
 
@@ -58,7 +61,13 @@ export class Bash implements Tool<typeInput, typeOutput, typeof inputSchema, typ
 
     formatResult({ output }: { output: typeOutput }): string {
         if (output.backgroundTaskId) {
-            return `Command is running in the background. Task id: ${output.backgroundTaskId}`;
+            return [
+                `Command is running in the background. Task id: ${output.backgroundTaskId}`,
+                output.backgroundOutputPath
+                    ? `Output is being written to: ${output.backgroundOutputPath}`
+                    : "",
+                "You will receive a task notification when it finishes. Use Read to inspect the output file or TaskStop to stop it.",
+            ].filter(Boolean).join("\n");
         }
 
         const sections: string[] = [];
@@ -124,10 +133,33 @@ export class Bash implements Tool<typeInput, typeOutput, typeof inputSchema, typ
         return { result: true };
     }
 
-    async call(input: typeInput, context: ToolUseContext): Promise<typeOutput> {
+    async call(
+        input: typeInput,
+        context: ToolUseContext,
+        runtime: Runtime,
+        state: State,
+    ): Promise<typeOutput> {
         const validation = await this.validateInput(input, context);
         if (validation.result === false) {
             throw new Error(validation.message);
+        }
+
+        if (input.run_in_background) {
+            const task = await startBackgroundBashTask({
+                command: input.command.trim(),
+                description: input.description,
+                timeout: input.timeout,
+                runtime,
+                state,
+            });
+            return {
+                stdout: "",
+                stderr: "",
+                interrupted: false,
+                backgroundTaskId: task.id,
+                backgroundTaskStatus: task.status,
+                backgroundOutputPath: task.outputFile,
+            };
         }
 
         const timeout = input.timeout ?? 120_000;

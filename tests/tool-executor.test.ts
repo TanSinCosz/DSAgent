@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
 import test from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 
 import { Bash } from "../src/Tools/Bash/Bash.js";
@@ -9,8 +12,48 @@ import { Glob } from "../src/Tools/Glob/Glob.js";
 import { Grep } from "../src/Tools/Grep/Grep.js";
 import { MemorySearch } from "../src/Tools/MemorySearch/MemorySearch.js";
 import type { Tool } from "../src/Tools/types.js";
+import { expandPath } from "../src/Tools/utils/path.js";
 import { createRuntime } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
+
+test("executeToolCall runs tools with the runtime working directory", async () => {
+  const runtimeCwd = await mkdtemp(join(tmpdir(), "opencat-tool-cwd-"));
+  const runtime = createRuntime({
+    cwd: runtimeCwd,
+    deepSeekRuntimeConfig: {
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      maxTokens: 128,
+    },
+    MemoryConfig: createMemoryConfig(),
+    transcriptStore: false,
+    tools: [{
+      name: "CwdProbe",
+      inputSchema: z.object({}),
+      outputSchema: z.object({ cwd: z.string() }),
+      description: () => "Report the active working directory.",
+      prompt: () => "Report the active working directory.",
+      call: () => ({ cwd: expandPath("relative.txt") }),
+      formatResult: ({ output }) => output.cwd,
+    } satisfies Tool<Record<string, never>, { cwd: string }>],
+  });
+
+  const result = await executeToolCall(
+    {
+      id: "call_cwd_probe",
+      type: "function",
+      function: {
+        name: "CwdProbe",
+        arguments: "{}",
+      },
+    },
+    runtime.tools,
+    runtime,
+    createState(),
+  );
+
+  assert.equal(result.content, join(runtimeCwd, "relative.txt"));
+});
 
 test("executeToolCall returns a tool result when a tool is unavailable", async () => {
   const state = createState();
@@ -137,6 +180,53 @@ test("executeToolCall allows tools granted by temporary command rules", async ()
   assert.equal(result.role, "tool");
   assert.equal(result.tool_call_id, "call_allowed_edit");
   assert.equal(result.content, "{\"ok\":true}");
+});
+
+test("executeToolCall cannot bypass a hard fork policy with temporary rules", async () => {
+  const state = createState();
+  const runtime = createRuntime({
+    cwd: process.cwd(),
+    deepSeekRuntimeConfig: {
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      maxTokens: 128,
+    },
+    MemoryConfig: createMemoryConfig(),
+    transcriptStore: false,
+    tools: [createNoopTool("Edit")],
+    enforceCanUseToolBeforeTemporaryRules: true,
+    appState: {
+      toolPermissionContext: {
+        mode: "default",
+        additionalWorkingDirectories: new Map(),
+        alwaysAllowRules: {
+          command: ["Edit"],
+        },
+        alwaysDenyRules: {},
+        alwaysAskRules: {},
+      },
+    },
+    canUseTool: () => ({
+      behavior: "deny",
+      message: "hard fork policy denied Edit",
+    }),
+  });
+
+  const result = await executeToolCall(
+    {
+      id: "call_hard_denied_edit",
+      type: "function",
+      function: {
+        name: "Edit",
+        arguments: "{}",
+      },
+    },
+    runtime.tools,
+    runtime,
+    state,
+  );
+
+  assert.match(result.content, /hard fork policy denied Edit/);
 });
 
 test("executeToolCall uses model-facing formatted tool results", async () => {

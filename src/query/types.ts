@@ -60,7 +60,12 @@ export type QueryEvent =
     behavior: "denied";
     reason: string;
   }
-  | { type: "tool_result"; toolCall: DeepSeekToolCall; message: DeepSeekMessage }
+  | {
+    type: "tool_result";
+    toolCall: DeepSeekToolCall;
+    message: DeepSeekMessage;
+    succeeded: boolean;
+  }
   | { type: "turn_end"; turn: number; hasToolUse: boolean }
   | {
     type: "done";
@@ -70,6 +75,16 @@ export type QueryEvent =
 
 export interface QueryOptions {
   maxTurns?: number;
+  /**
+   * Forked agents already inherit the exact context sent to the parent model.
+   * Re-materializing volatile context would reorder that prefix and lose cache.
+   */
+  skipRequestContextMaterialization?: boolean;
+  /**
+   * The first turn already contains the parent's final projected prefix.
+   * Preserve it byte-for-byte for prompt-cache reuse.
+   */
+  usePreprojectedMessagesOnFirstTurn?: boolean;
   requestToolPermission?: (
     request: ToolPermissionRequest,
   ) => Promise<ToolPermissionDecision>;

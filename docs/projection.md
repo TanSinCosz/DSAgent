@@ -27,10 +27,10 @@ state.Messages（权威历史，~500K tokens）
   │   → 每组 tool_result > 50K tokens → 持久化到文件 → 替换为瘦引用
   │
   ├─ Layer 3: Bulky Tool-result Compact          ← 特定大工具结果 → 头尾预览
-  │   → > 180K tokens 时触发 → 保留最近 5 个 → 其余压缩为预览
+  │   → > 180K tokens 时触发 → 保护尾部候选（非固定数量，默认按投影尾部保护），其余压缩为预览。可通过 `OPENCAT_BULKY_TOOL_RESULT_KEEP_RECENT` 环境变量覆盖为保留最近 N 个
   │
   ├─ Layer 4: History Snip                       ← 仍超标 → 整条删除旧消息
-  │   → > 180K tokens 且 bulky compact 已触发 → 裁剪到 ~80K tokens
+  │   → bulkyCompactNeeded 且 total > 80K 时触发 → 循环 snipped 到 ~80K
   │
   ▼
 pure projected messages（~60-120K tokens）
@@ -60,17 +60,17 @@ Phase B 完成后的 state.Messages
 
 ### 10.3 触发阈值一览
 
-| 常量                                                        | 默认值                      | 环境变量覆盖                                                | 含义                             |
-| ----------------------------------------------------------- | --------------------------- | ----------------------------------------------------------- | -------------------------------- |
-| `MAX_TOOL_RESULTS_PER_MESSAGE_TOKENS`                     | **50,000**            | 无                                                          | 每组 tool_result 的 token 硬上限 |
-| `DEFAULT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS`        | **180,000**           | `OPENCAT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS`        | 超过此值触发 bulky compact       |
-| `DEFAULT_BULKY_TOOL_RESULT_COMPACT_TARGET_CONTEXT_TOKENS` | **80,000**            | `OPENCAT_BULKY_TOOL_RESULT_COMPACT_TARGET_CONTEXT_TOKENS` | bulky compact 的目标值           |
-| `BULKY_TOOL_RESULT_COMPACT_PREVIEW_TOKENS`                | **1,000**             | 无                                                          | 单条结果 ≤ 1K tokens 不压缩     |
-| `DEFAULT_BULKY_TOOL_RESULT_KEEP_RECENT`                   | **5**                 | `OPENCAT_BULKY_TOOL_RESULT_KEEP_RECENT`                   | 保留最近 N 个预算键              |
-| `DEFAULT_HISTORY_SNIP_TARGET_TOKENS`                      | **80,000**            | `OPENCAT_HISTORY_SNIP_TARGET_TOKENS`                      | snip 后的目标 token 数           |
-| `DEFAULT_HISTORY_SNIP_CANCEL_CONTEXT_TOKENS`             | **120,000**           | `OPENCAT_HISTORY_SNIP_CANCEL_CONTEXT_TOKENS`             | 超此值取消 snip 回退             |
-| `TOOL_RESULT_BUDGET_TAG`                                  | `"<tool-result-budget>"`  | 无                                                          | 预算替换标记                     |
-| `BULKY_TOOL_RESULT_COMPACT_TAG`                           | `"<tool-result-compact>"` | 无                                                          | 大体积压缩标记                   |
+| 常量                                                        | 默认值                      | 环境变量覆盖                                                | 含义                                        |
+| ----------------------------------------------------------- | --------------------------- | ----------------------------------------------------------- | ------------------------------------------- |
+| `MAX_TOOL_RESULTS_PER_MESSAGE_TOKENS`                     | **50,000**            | 无                                                          | 每组 tool_result 的 token 硬上限            |
+| `DEFAULT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS`        | **180,000**           | `OPENCAT_BULKY_TOOL_RESULT_COMPACT_CONTEXT_TOKENS`        | 超过此值触发 bulky compact                  |
+| `DEFAULT_BULKY_TOOL_RESULT_COMPACT_TARGET_CONTEXT_TOKENS` | **80,000**            | `OPENCAT_BULKY_TOOL_RESULT_COMPACT_TARGET_CONTEXT_TOKENS` | bulky compact 的目标值                      |
+| `BULKY_TOOL_RESULT_COMPACT_PREVIEW_TOKENS`                | **1,000**             | 无                                                          | 单条结果 ≤ 1K tokens 不压缩                |
+| （旧版兼容）                                                | —                          | `OPENCAT_BULKY_TOOL_RESULT_KEEP_RECENT`                   | 覆盖为保留最近 N 个（默认使用投影尾部保护） |
+| `DEFAULT_HISTORY_SNIP_TARGET_TOKENS`                      | **80,000**            | `OPENCAT_HISTORY_SNIP_TARGET_TOKENS`                      | snip 后的目标 token 数                      |
+| `DEFAULT_HISTORY_SNIP_CANCEL_CONTEXT_TOKENS`              | **120,000**           | `OPENCAT_HISTORY_SNIP_CANCEL_CONTEXT_TOKENS`              | 超此值取消 snip 回退                        |
+| `TOOL_RESULT_BUDGET_TAG`                                  | `"<tool-result-budget>"`  | 无                                                          | 预算替换标记                                |
+| `BULKY_TOOL_RESULT_COMPACT_TAG`                           | `"<tool-result-compact>"` | 无                                                          | 大体积压缩标记                              |
 
 **触发条件的门控逻辑**：
 
@@ -103,7 +103,7 @@ applyAutoCompressSummary(state)
      → selectFreshToReplace() 选出最大的 N 个结果来替换
      → 将选中的结果内容持久化到文件（.opencat/tool-results/）
      → 消息内容替换为 <tool-result-budget> 瘦引用
-  3. skip 的: maxResultSizeChars === Infinity 的工具（如 agent fork）
+  3. skip: maxResultSizeChars === Infinity 的工具（只有 Read）（如 agent fork）
 ```
 
 **替换格式**：
@@ -116,7 +116,7 @@ Budget key: tool_result:msg_xxx
 </tool-result-budget>
 ```
 
-**持久化**：已替换的结果在 `ToolResultBudgetState.replacements` 中缓存。后续轮次直接复用缓存（`applyExistingBulkyToolCompactionsWithStats` / `applyExistingToolResultBudgetWithStats`），不会重复持久化。
+**持久化**：已替换的结果持久化到磁盘（`.opencat/tool-results/`），内存中 `ToolResultBudgetState.replacements` 缓存映射关系。后续轮次通过 `applyExisting*` 系列函数直接复用，不会重复持久化。
 
 ### 10.6 Layer 3: Bulky Tool-result Compact
 
@@ -131,7 +131,7 @@ Budget key: tool_result:msg_xxx
 2. 计算 projectedTotalTokens = contextBaseTokens + totalProjectedMessageTokens
 3. 对于每个候选（按优先级）:
    → 跳过条件:
-     • protectedBudgetKeys 中有（最近 N 个，默认 5）
+     • protectedBudgetKeys 中有（投影尾部的候选，默认受 30K/12/3 尾部保护，非固定数量）
      • projectedTotalTokens ≤ 80K（已达目标）
      • sizeTokens ≤ 1,000（不值得压缩）
    → 否则:
@@ -145,26 +145,30 @@ Budget key: tool_result:msg_xxx
 
 ```
 <tool-result-compact>
-This large tool result was compacted to save context.
-The authoritative content is stored in the budget state and can be recovered.
-Original token count: 12000
-Budget key: bulky_tool_result:msg_yyy
-
-[Head 250 chars]
-... (omitted middle) ...
-[Tail 250 chars]
+Tool result from {toolName} was compacted in this request because
+this tool commonly produces large, regenerable outputs.
+tool_call_id: ...
+original_size: ... characters
+estimated_tokens: ...
+persisted_path: .opencat/tool-results/{sessionId}/{id}
+sha256: ...
+The original result was persisted once and was not re-executed.
+<preview_head>...前1000 chars头...</preview_head>
+[N chars omitted from the middle]
+<preview_tail>...后1000 chars尾...</preview_tail>
 </tool-result-compact>
 ```
 
 **关键细节**：
 
 - 第一遍（`applyExistingBulkyToolCompactionsWithStats`）：复用之前已经创建的压缩
-- 第二遍（`createBulkyToolCompactionsWithStats`）：创建新的压缩
-- 保护尾部最近的 5 个 bulky 结果不被压缩（保证模型能看到最近的上下文）
+- 第二遍（`createBulkyToolCompactionsWithStats`）：创建新的压缩，通过 `persistToolResultContent()` 持久化原内容到 `.opencat/tool-results/{sessionId}/{id}`
+- 保护投影尾部内的 bulky 结果不被压缩（默认基于 30K/12/3 尾部保护，可通过环境变量覆盖为保留最近 N 个）
+- 单条 ≤ 1K tokens 的结果不压缩
 
 ### 10.7 Layer 4: History Snip
 
-**触发条件**：`bulkyCompactNeeded === true` **且** 总投影 > 80K tokens（`getBulkyToolResultCompactTargetContextTokens()`）。且本轮的最尾部消息没有被 snipped 过（防重复）。
+**触发条件**：`bulkyCompactNeeded === true` **且** 总投影 > 80K tokens（`getBulkyToolResultCompactTargetContextTokens()`），且本轮的最尾部消息没有被 snipped 过（防重复）。
 
 **原理**：当 bulky compact 都达不到目标时，直接**删除旧消息**（不再保留摘要）。这是最后的兜底手段。
 
@@ -174,13 +178,33 @@ createHistorySnipBoundary()
   2. if currentSize ≤ desired → 不需要 snip
   3. targetRemoval = currentSize - desired
   4. selectHistorySnipDecision():
-     → 从头部开始遍历（到 protectedRecentTailStart 为止）
-     → 对于可删除的消息:
-       • user/assistant 非工具消息 → contentOnly（保留文本，丢弃 tool_calls/reasoning）
-       • tool / assistant-with-tool_calls → 整条删除
-       • runtime/long_term_memory/dynamic_skill 来源 → 整条删除（可再生）
+     → 从头部开始遍历（到 protectedRecentTailStart 为止），每个消息先尝试 contentOnly 再尝试移除：
+       • createHistorySnipContentOnlyMessage(): user 消息 or 含文本的 assistant 消息 → contentOnly（保留文本，丢弃 tool_calls/reasoning）
+       • isHistorySnipRemovableMessage(): tool 消息 / 无文本的 assistant-with-tool_calls / 可再生上下文 → 整条删除
+       • system 消息：两种条件都不匹配 → 隐式保护
      → 直到移除的 token 数 ≥ targetRemoval
+
+5. 循环最多 8 次（每次创建一个 snip 边界后重新投影，检查是否仍超标）:
+   for (attempt = 0; attempt < 8; attempt++):
+     if 投影总 token ≤ 80K → 退出循环
+     createHistorySnipBoundary() → push 到 state.historySnips
+     projectMessagesWithExistingCompressionState() → 重新投影
+
+6. 回退机制（防过切）:
+   if 新 snip 创建后总 token 仍 > 120K（DEFAULT_HISTORY_SNIP_CANCEL_CONTEXT_TOKENS）:
+     → 撤销本轮所有新增 snip（historySnips.splice(startCount)）
+     → 恢复 toolResultBudgetState 快照（若在 bulky 阶段拍过）
+     → 重新投影，放弃 snip，交给 auto-compress 处理
 ```
+
+**关键变化（v2）**：
+
+| 维度                    | 旧逻辑                   | 新逻辑                                                                                          |
+| ----------------------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
+| Snip 创建               | 每次最多创建一个 snip    | 循环最多 8 次，连续 snipped 直到不超标                                                          |
+| 回退                    | 无回退，可能过度 snipped | 超标 120K 时全部回退，交给 auto-compress                                                        |
+| tool-result budget 状态 | 不受 snip 影响           | snip 回退时同步恢复 budget 快照                                                                 |
+| contentOnly 消息        | 无自动清理               | auto-compress 后通过`snippedContentCompactedThroughMessageId` 清理已持久化的 contentOnly 标记 |
 
 **尾部保护**（`calculateProtectedRecentTailStart`）：
 
@@ -337,17 +361,17 @@ ToolResultBudgetState {
 
 ### 10.11 大体积工具压缩的可恢复性
 
-被 bulky compact 压缩的工具结果，其完整内容保存在 `budgetState.replacements` 中（Map，内存中）。如果需要恢复原始内容（例如 fork 子 agent 需要完整上下文），可通过预算键查找。但这个 Map **不持久化到磁盘**——进程重启后恢复会丢失，需要从 session transcript 重建。
+被 bulky compact 压缩的工具结果，其完整内容**持久化到磁盘**（`.opencat/tool-results/{sessionId}/{id}`），替换消息中记录 `persisted_path` 和 `sha256`。模型可通过 Read 工具读取原始内容恢复。Tool-result budget 的替换也类似持久化到磁盘。进程重启后数据仍然存在。压缩决策（budget key → replacement）缓存在内存的 `budgetState.replacements` 中，重启丢失后会从 session transcript 重建。
 
 ### 10.12 与 auto-compress 的关系
 
-|                    | Auto-compress                          | 投影管道                           |
-| ------------------ | -------------------------------------- | ---------------------------------- |
+|                    | Auto-compress                            | 投影管道                                     |
+| ------------------ | ---------------------------------------- | -------------------------------------------- |
 | **触发时机** | 上下文超过 180K tokens（Phase B 中判断） | 每轮 API 调用前（Phase B 和 Phase C 各一次） |
-| **操作对象** | `state.Messages`（永久修改）         | 投影消息（临时视图）               |
-| **是否可逆** | 不可逆（旧消息被摘要替换）             | 是（投影不改变`state.Messages`） |
-| **结果**     | 摘要 + 尾部保留                        | DeepSeekMessage[]                  |
-| **负责文件** | `src/auto-compress/auto-compress.ts` | `src/query/messages.ts`          |
+| **操作对象** | `state.Messages`（永久修改）           | 投影消息（临时视图）                         |
+| **是否可逆** | 不可逆（旧消息被摘要替换）               | 是（投影不改变`state.Messages`）           |
+| **结果**     | 摘要 + 尾部保留                          | DeepSeekMessage[]                            |
+| **负责文件** | `src/auto-compress/auto-compress.ts`   | `src/query/messages.ts`                    |
 
 **执行顺序**：Phase B 中 `buildMessagesForQuery()` → 检查是否需要 auto-compress → 若触发则 `applyAutoCompression()` 永久修改 `state.Messages` → 再次 `buildMessagesForQuery()` 应用新压缩。然后 Phase C 追加运行时上下文后再做最终投影。
 

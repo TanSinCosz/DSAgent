@@ -28,6 +28,7 @@ type SweBenchInstance = {
 
 type EvalConfig = {
   version?: string;
+  runPrefix?: string;
   evalVersion?: string;
   runId?: string;
   datasetPath?: string;
@@ -105,12 +106,14 @@ const deepSeekApiKey = apiKey;
 
 const configPath = path.resolve(
   process.env.SWE_VERIFIED_CONFIG?.trim() ??
+    getCliArgument("--config") ??
     ".opencat/evals/swe-verified-cache/config.json",
 );
 const evalConfig = await loadEvalConfig(configPath);
+const runPrefix = stringSetting(evalConfig.runPrefix) ?? "swe_verified_cache";
 const runId = process.env.SWE_VERIFIED_RUN_ID?.trim() ||
   stringSetting(evalConfig.runId) ||
-  `swe_verified_cache_${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  `${runPrefix}_${new Date().toISOString().replace(/[:.]/g, "-")}`;
 const evalVersion = process.env.SWE_VERIFIED_VERSION?.trim() ||
   stringSetting(evalConfig.evalVersion) ||
   stringSetting(evalConfig.version) ||
@@ -306,7 +309,7 @@ async function findLocalRepo(repo: string): Promise<string | undefined> {
 
 function renderSweBenchPrompt(instance: SweBenchInstance): string {
   return [
-    "You are evaluating OpenCat on a SWE-bench Verified issue.",
+    "You are evaluating OpenCat on a SWE-bench issue.",
     "Modify the checked-out repository to fix the issue. Prefer minimal, well-tested changes.",
     "Use the available tools to inspect, edit, and verify the code.",
     "Do not fetch unrelated web content unless the repository itself requires it.",
@@ -444,6 +447,12 @@ async function runPythonDatasetLoader(args: string[]): Promise<string> {
   throw new Error(`Failed to run Python SWE-bench loader.\n${errors.join("\n")}`);
 }
 
+function getCliArgument(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  const value = index >= 0 ? process.argv[index + 1] : undefined;
+  return value?.trim() || undefined;
+}
+
 function normalizeInstance(value: unknown): SweBenchInstance {
   const record = value as Record<string, unknown>;
   const instance = {
@@ -510,7 +519,13 @@ function summarizeEvents(
       hardHistorySnipCount += event.hardHistorySnipApplied ? 1 : 0;
       toolResultBudgetReplacementCount +=
         event.toolResultBudgetReplacementCount;
-      bulkyToolCompactCount += event.bulkyToolCompactCount;
+      // This is the number of replacements active in this request, not a
+      // cumulative operation count. The same replacements are reported again
+      // on later context_ready events, so summing would overcount them.
+      bulkyToolCompactCount = Math.max(
+        bulkyToolCompactCount,
+        event.bulkyToolCompactCount,
+      );
       toolResultCharsBeforeBudget += event.toolResultCharsBeforeBudget;
       toolResultCharsAfterBudget += event.toolResultCharsAfterBudget;
       toolResultCharsAfterCompact += event.toolResultCharsAfterCompact;

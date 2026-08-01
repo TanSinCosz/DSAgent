@@ -1,0 +1,4 @@
+interface:
+  display_name: "SWE Session Auditor"
+  short_description: "Audit SWE sessions for protocol and agent failures"
+  default_prompt: "Use $swe-session-auditor to audit this SWE evaluation session and produce evidence-backed JSON and Markdown reports."

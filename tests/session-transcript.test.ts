@@ -407,6 +407,42 @@ test("transcript restore keeps tool result projection replacement state", async 
   );
 });
 
+test("transcript restore keeps long-term memory recall state without bodies", async () => {
+  const runtime = createRuntime({
+    cwd: await mkdtemp(join(tmpdir(), "opencat-memory-state-transcript-")),
+    sessionId: "session_memory_state_restore",
+    deepSeekRuntimeConfig: createRuntimeConfig(),
+    deepSeekClient: createNoopClient(),
+    MemoryConfig: createMemoryConfig(),
+  });
+  const cursorMessage = createMessage({
+    role: "assistant",
+    content: "memory extraction boundary",
+  });
+  const state = createState({
+    messages: [cursorMessage],
+    longTermMemory: {
+      surfacedFiles: {
+        "preferences.md": {
+          modifiedAtMs: 123,
+          injectedBytes: 456,
+        },
+      },
+      surfacedBytes: 456,
+      lastExtractedMessageId: cursorMessage.id,
+    },
+  });
+
+  await recordTranscriptMessage(runtime, cursorMessage);
+  await recordTranscriptStateSnapshot(runtime, state, "long_term_memory");
+  const restored = await loadStateFromTranscript(runtime.transcriptStore!);
+  const raw = await readFile(runtime.transcriptStore!.path, "utf8");
+
+  assert.ok(restored);
+  assert.deepEqual(restored.longTermMemory, state.longTermMemory);
+  assert.doesNotMatch(raw, /memory body that should not be persisted/);
+});
+
 test("transcript merges lean state snapshots without repeating projection state", async () => {
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-lean-state-transcript-")),

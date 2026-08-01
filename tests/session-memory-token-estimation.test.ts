@@ -4,6 +4,9 @@ import {
   estimateMessageTokens,
   shouldUpdateSessionMemory,
 } from "../src/session-memory/session-memory.js";
+import {
+  buildSessionMemoryUpdatePrompt,
+} from "../src/session-memory/prompts.js";
 import { createMessage } from "../src/types/messages.js";
 import {
   DEFAULT_SESSION_MEMORY_CONFIG,
@@ -17,6 +20,22 @@ function createUsage(promptTokens: number, completionTokens = 0) {
     total_tokens: promptTokens + completionTokens,
   };
 }
+
+test("session-memory task prompt contains the complete direct-fork policy", () => {
+  const prompt = buildSessionMemoryUpdatePrompt({
+    currentNotes: "# Session Title\n_title_\n\nExisting notes",
+    notesPath: "C:\\memory\\session.md",
+  });
+
+  assert.match(prompt, /forked session-memory agent, not the main agent/);
+  assert.match(prompt, /do not repeat it or answer the user/i);
+  assert.match(prompt, /complete contents are available in your file cache/i);
+  assert.match(prompt, /Do not call Read/);
+  assert.match(prompt, /call any tool except Edit/i);
+  assert.match(prompt, /all required Edit calls in parallel in one message/i);
+  assert.match(prompt, /Do not produce a final report or confirmation message/i);
+  assert.doesNotMatch(prompt, /<fork_worker>/);
+});
 
 test("session-memory token estimate anchors on the latest API context usage", () => {
   const assistant = createMessage(

@@ -14,6 +14,7 @@ import { Plan } from "./Plan/Plan.js";
 import { ReadSkill } from "./ReadSkill/ReadSkill.js";
 import { SendMessage } from "./SendMessage/SendMessage.js";
 import { TodoWrite } from "./TodoWrite/TodoWrite.js";
+import { TaskStop } from "./TaskStop/TaskStop.js";
 import { WebFetch } from "./WebFetch/WebFetch.js";
 import { WebSearch } from "./WebSearch/WebSearch.js";
 import type { Tools } from "./types.js";
@@ -41,6 +42,7 @@ export function createDefaultTools(
     new MemorySave(),
     new SendMessage(),
     new TodoWrite(),
+    new TaskStop(),
     new Plan(),
   ];
 }
@@ -58,6 +60,7 @@ export {
   ReadSkill,
   SendMessage,
   TodoWrite,
+  TaskStop,
   WebFetch,
   WebSearch,
 };

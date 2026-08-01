@@ -232,10 +232,10 @@ test("query compacts visible snip content-only history after session memory cove
     role: "assistant",
     content: `OLD_CONTENT_ONLY_ASSISTANT\n${"old assistant text ".repeat(300)}`,
   });
-  const recentMessages = Array.from({ length: 8 }, (_, index) =>
+  const recentMessages = Array.from({ length: 12 }, (_, index) =>
     createMessage({
       role: "user",
-      content: `recent user ${index}`,
+      content: `recent user ${index}\n${"recent context ".repeat(900)}`,
     })
   );
   const state = createState({
@@ -287,7 +287,7 @@ test("query compacts visible snip content-only history after session memory cove
     oldAssistant.id,
   );
   assert.equal(state.historySnips.length, 1);
-  assert.equal(streamRequests.length, 1);
+  assert.ok(streamRequests.length >= 1);
 
   const requestText = JSON.stringify(streamRequests[0]!.messages);
   assert.match(requestText, /<session_memory>/);

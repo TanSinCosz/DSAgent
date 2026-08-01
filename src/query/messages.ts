@@ -73,7 +73,10 @@ export async function buildMessagesForQuery(
 
   // Create new bulky replacements only when the whole request crosses the
   // threshold. Existing replacements are applied above on every build.
-  if (isContextOverBulkyCompactThreshold(deepSeekMessages)) {
+  if (
+    isContextProjectionEnabled(runtime) &&
+    isContextOverBulkyCompactThreshold(deepSeekMessages)
+  ) {
     toolResultBudgetSnapshotBeforeNewBulky = snapshotToolResultBudgetState(
       runtime,
       state,
@@ -104,7 +107,7 @@ export async function buildMessagesForQuery(
   // snips and let auto-compress handle the older context later.
   const historySnips = ensureHistorySnips(state);
   const historySnipStartCount = historySnips.length;
-  if (shouldCreateHistorySnipBoundary(
+  if (isContextProjectionEnabled(runtime) && shouldCreateHistorySnipBoundary(
     state,
     visibleMessages,
     stats,
@@ -172,6 +175,29 @@ export async function buildMessagesForQuery(
   };
 }
 
+/**
+ * Builds the first request for a cache-safe fork from an already projected
+ * parent prefix. Reapplying compression here could rewrite that prefix.
+ */
+export async function buildPreprojectedMessagesForQuery(
+  runtime: Runtime,
+  messages: readonly Message[],
+): Promise<MessagesForQuery> {
+  const systemPrompt = await getOrCreateSystemPrompt(runtime);
+  const visibleMessages = cloneMessages(messages);
+
+  return {
+    systemPrompt,
+    messages: await createDeepSeekMessages({
+      runtime,
+      systemPrompt,
+      messages: visibleMessages,
+    }),
+    forkContextMessages: cloneMessages(visibleMessages),
+    stats: createProjectionStats(),
+  };
+}
+
 type ToolResultBudgetStateSnapshot = {
   seenIds: Set<string>;
   replacements: Map<string, string>;
@@ -208,20 +234,38 @@ async function projectMessagesWithExistingCompressionState(
   stats: MessageProjectionStats;
 }> {
   const projectedMessages = cloneMessages(applyAutoCompressSummary(state));
-  const budgeted = applyExistingToolResultBudgetWithStats(
-    projectedMessages,
-    runtime,
-    state,
-  );
-  const compacted = applyExistingBulkyToolCompactionsWithStats(
-    budgeted.messages,
-    runtime,
-    state,
-  );
-  const visibleMessages = applyHistorySnipBoundaries(
-    state,
-    compacted.messages,
-  );
+  const projectionEnabled = isContextProjectionEnabled(runtime);
+  const budgeted = projectionEnabled
+    ? applyExistingToolResultBudgetWithStats(
+      projectedMessages,
+      runtime,
+      state,
+    )
+    : {
+      messages: projectedMessages,
+      stats: {
+        toolResultBudgetReplacementCount: 0,
+        toolResultCharsBeforeBudget: 0,
+        toolResultCharsAfterBudget: 0,
+      },
+    };
+  const compacted = projectionEnabled
+    ? applyExistingBulkyToolCompactionsWithStats(
+      budgeted.messages,
+      runtime,
+      state,
+    )
+    : {
+      messages: budgeted.messages,
+      stats: {
+        bulkyToolCompactNeeded: false,
+        bulkyToolCompactCount: 0,
+        toolResultCharsAfterCompact: 0,
+      },
+    };
+  const visibleMessages = projectionEnabled
+    ? applyHistorySnipBoundaries(state, compacted.messages)
+    : compacted.messages;
   const deepSeekMessages = await createDeepSeekMessages({
     runtime,
     systemPrompt,
@@ -247,6 +291,10 @@ async function projectMessagesWithExistingCompressionState(
 
 function cloneMessages(messages: readonly Message[]): Message[] {
   return messages.map((message) => ({ ...message }) as Message);
+}
+
+function isContextProjectionEnabled(runtime: Runtime): boolean {
+  return runtime.contextCompressionConfig?.enableProjection !== false;
 }
 
 function createProjectionStats(): MessageProjectionStats {
@@ -725,11 +773,17 @@ export function applyHistorySnipBoundaries(
     collectCompactedSnipContentOnlyMessageIds(state);
 
   return messages.flatMap((message) => {
-    if (removedMessageIds.has(message.id)) {
+    if (
+      removedMessageIds.has(message.id) &&
+      !isHistorySnipPreservedMessage(message)
+    ) {
       return [];
     }
 
-    if (contentOnlyMessageIds.has(message.id)) {
+    if (
+      contentOnlyMessageIds.has(message.id) &&
+      !isHistorySnipPreservedMessage(message)
+    ) {
       if (compactedContentOnlyMessageIds.has(message.id)) {
         return [];
       }
@@ -905,18 +959,7 @@ function selectHistorySnipDecision(
     }
 
     const message = messages[index]!;
-    const contentOnlyMessage = createHistorySnipContentOnlyMessage(message);
-
-    if (contentOnlyMessage) {
-      const savedTokens = Math.max(
-        0,
-        getMessageTokenSize(message) - getMessageTokenSize(contentOnlyMessage),
-      );
-
-      if (savedTokens > 0) {
-        decision.contentOnlyMessageIds.push(message.id);
-        removedTokens += savedTokens;
-      }
+    if (isHistorySnipPreservedMessage(message)) {
       continue;
     }
 
@@ -960,26 +1003,51 @@ function createHistorySnipContentOnlyMessage(message: Message): Message | null {
 }
 
 function isHistorySnipRemovableMessage(message: Message): boolean {
-  if (message.role === "tool") {
-    return true;
-  }
-
-  if (message.role === "assistant" && message.tool_calls?.length) {
-    return true;
-  }
-
-  return isRegenerableAttachmentMessage(message);
-}
-
-function isRegenerableAttachmentMessage(message: Message): boolean {
-  return message.source === "runtime" ||
-    message.source === "long_term_memory" ||
+  return message.source === "long_term_memory" ||
     message.source === "file_restore" ||
     message.source === "dynamic_skill" ||
-    message.source === "todo_list" ||
+    (
+      message.source === "runtime" &&
+      !containsProtectedRuntimeState(message)
+    );
+}
+
+/**
+ * History snip is deliberately conservative: business messages and the
+ * current runtime state stay structurally intact. Tool messages are included
+ * here so an old assistant tool call can never be left without its result.
+ */
+function isHistorySnipPreservedMessage(message: Message): boolean {
+  if (
+    (message.role === "user" && message.source === "user") ||
+    (message.role === "assistant" && message.source === "assistant") ||
+    message.role === "tool"
+  ) {
+    return true;
+  }
+
+  return message.source === "todo_list" ||
     message.source === "plan_mode" ||
+    message.source === "plan_file" ||
+    message.source === "agent_task_status" ||
     message.source === "agent_notification" ||
-    message.source === "agent_message";
+    message.source === "agent_message" ||
+    message.source === "background_task_status" ||
+    message.source === "task_notification" ||
+    (
+      message.source === "runtime" &&
+      containsProtectedRuntimeState(message)
+    );
+}
+
+function containsProtectedRuntimeState(message: Message): boolean {
+  if (typeof message.content !== "string") {
+    return false;
+  }
+
+  return /<context_block source="(?:todo_list|plan_mode|plan_file|agent_task_status|agent_notification|agent_message|background_task_status|task_notification)">/.test(
+    message.content,
+  );
 }
 
 type ProjectionRecentTailStats = {

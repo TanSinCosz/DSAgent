@@ -31,6 +31,7 @@ import {
 } from "./config.js";
 import type { ContextProjectionState, ToolResultBudgetState } from "./context.js";
 import type { RunObserver } from "../telemetry/observer.js";
+import type { Message } from "./messages.js";
 
 export type MainAgentId = "main";
 export type SubAgentId = `agent_${string}`;
@@ -43,6 +44,13 @@ export interface RuntimeUsageStats {
   totalTokens: number;
   promptCacheHitTokens: number;
   promptCacheMissTokens: number;
+}
+
+export interface ContextCompressionConfig {
+  /** Keep the normal message projection pipeline enabled by default. */
+  enableProjection?: boolean;
+  /** Override the auto-compress trigger for benchmark profiles. */
+  autoCompressTriggerTokens?: number;
 }
 
 export interface Runtime {
@@ -62,6 +70,12 @@ export interface Runtime {
   userContext?: Record<string, string>;
   contextProjectionState?: ContextProjectionState;
   toolResultBudgetState?: ToolResultBudgetState;
+  contextCompressionConfig?: ContextCompressionConfig;
+  /**
+   * Internal fork policies must run before temporary command allow rules.
+   * Ordinary interactive permission callbacks retain their existing behavior.
+   */
+  enforceCanUseToolBeforeTemporaryRules?: boolean;
   MemoryConfig: MemoryConfig;
   longTermMemory?: MemoryTool;
   longTermMemoryConfig: LongTermMemoryRuntimeConfig;
@@ -72,6 +86,11 @@ export interface Runtime {
   tools: Tools;
   toolUseContext: ToolUseContext;
   mcpConnections: readonly McpConnection[];
+  /**
+   * Exact business-message prefix used by the latest parent model request.
+   * Cache-safe forks reuse this prefix instead of rebuilding from raw State.
+   */
+  lastModelRequestContextMessages?: Message[];
 }
 
 export interface CreateRuntimeOptions {
@@ -89,6 +108,8 @@ export interface CreateRuntimeOptions {
   userContext?: Record<string, string>;
   contextProjectionState?: ContextProjectionState;
   toolResultBudgetState?: ToolResultBudgetState;
+  contextCompressionConfig?: ContextCompressionConfig;
+  enforceCanUseToolBeforeTemporaryRules?: boolean;
   MemoryConfig: MemoryConfig;
   longTermMemory?: MemoryTool;
   longTermMemoryConfig?: CreateLongTermMemoryRuntimeConfigOptions;
@@ -150,6 +171,9 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
     userContext: options.userContext,
     contextProjectionState: options.contextProjectionState,
     toolResultBudgetState: options.toolResultBudgetState,
+    contextCompressionConfig: options.contextCompressionConfig,
+    enforceCanUseToolBeforeTemporaryRules:
+      options.enforceCanUseToolBeforeTemporaryRules,
     MemoryConfig: options.MemoryConfig,
     longTermMemory: options.longTermMemory,
     longTermMemoryConfig: createLongTermMemoryRuntimeConfig(

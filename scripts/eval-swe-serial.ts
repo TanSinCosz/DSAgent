@@ -15,6 +15,7 @@ import type { EvaluationEvent } from "../src/telemetry/events.js";
 import { JsonlRunObserver } from "../src/telemetry/jsonl.js";
 import { createMessage } from "../src/types/messages.js";
 import { createRuntime } from "../src/types/runtime.js";
+import type { ContextCompressionConfig } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
 
 const execFileAsync = promisify(execFile);
@@ -30,6 +31,7 @@ type SweBenchInstance = {
 
 type SerialEvalConfig = {
   runId?: string;
+  runPrefix?: string;
   datasetPath?: string;
   outputDir?: string;
   reposDir?: string;
@@ -40,7 +42,11 @@ type SerialEvalConfig = {
   allowNetworkClone?: boolean;
   allowWebTools?: boolean;
   allowDirtyWorkspaces?: boolean;
+  workspaceNamespace?: string;
+  /** Number of independent SWE items that may run at once. */
+  concurrency?: number;
   phases?: Array<"investigate" | "fix">;
+  contextCompression?: ContextCompressionConfig;
 };
 
 type PhaseName = "investigate" | "fix";
@@ -80,12 +86,14 @@ if (!apiKey) {
 const config = await loadSerialConfig(
   path.resolve(
     process.env.SWE_SERIAL_CONFIG?.trim() ??
+      getCliArgument("--config") ??
       ".opencat/evals/swe-serial/config.json",
   ),
 );
+const runPrefix = config.runPrefix?.trim() || "swe_serial";
 const runId = process.env.SWE_SERIAL_RUN_ID?.trim() ||
   config.runId?.trim() ||
-  `swe_serial_${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  `${runPrefix}_${new Date().toISOString().replace(/[:.]/g, "-")}`;
 const outputRoot = path.resolve(
   process.env.SWE_SERIAL_OUTPUT_DIR?.trim() ||
     config.outputDir?.trim() ||
@@ -112,6 +120,11 @@ const allowDirtyWorkspaces = readBooleanSetting(
   false,
 );
 const phases = parsePhases(process.env.SWE_SERIAL_PHASES, config.phases);
+const concurrency = readPositiveIntegerSetting(
+  "SWE_SERIAL_CONCURRENCY",
+  config.concurrency,
+  1,
+);
 const workspaceOptions: SweWorkspaceOptions = {
   reposDir: process.env.SWE_SERIAL_REPOS_DIR?.trim() || config.reposDir,
   workspaceRoot: process.env.OPENCAT_SWE_WORKSPACE_DIR?.trim() ||
@@ -120,38 +133,71 @@ const workspaceOptions: SweWorkspaceOptions = {
     config.repoCacheRoot,
   allowNetworkClone,
   projectRoot: process.cwd(),
+  workspaceNamespace: config.workspaceNamespace,
 };
 
 await mkdir(outputRoot, { recursive: true });
 const datasetPath = await resolveDatasetPath(config);
 const instances = (await loadInstances(datasetPath)).slice(0, limit);
 const startedAt = new Date();
-const results: InstanceSummary[] = [];
+const results: Array<InstanceSummary | undefined> = Array(instances.length);
+let nextInstanceIndex = 0;
+let summaryWrite = Promise.resolve();
 
-for (const instance of instances) {
-  const result = await runInstance(instance);
-  results.push(result);
-  await writeJson(path.join(outputRoot, "summary.json"), createSummary());
-  console.log(
-    `[${results.length}/${instances.length}] ${instance.instance_id}: ${result.status}`,
-  );
+function queueSummaryWrite(): Promise<void> {
+  const snapshot = createSummary();
+  summaryWrite = summaryWrite
+    .catch(() => undefined)
+    .then(() => writeJson(path.join(outputRoot, "summary.json"), snapshot));
+  return summaryWrite;
 }
 
-await writeJson(path.join(outputRoot, "summary.json"), createSummary());
-console.log(JSON.stringify(createSummary(), null, 2));
+async function runWorker(workerIndex: number): Promise<void> {
+  while (true) {
+    const index = nextInstanceIndex++;
+    const instance = instances[index];
+    if (!instance) {
+      return;
+    }
 
-function createSummary() {
+    const result = await runInstance(instance);
+    results[index] = result;
+    await queueSummaryWrite();
+    const completed = results.filter(Boolean).length;
+    console.log(
+      `[${completed}/${instances.length}] worker=${workerIndex} ${instance.instance_id}: ${result.status}`,
+    );
+  }
+}
+
+const workerCount = Math.min(concurrency, Math.max(1, instances.length));
+await Promise.all(
+  Array.from({ length: workerCount }, (_, index) => runWorker(index + 1)),
+);
+await summaryWrite;
+const finalSummary = createSummary(true);
+await writeJson(path.join(outputRoot, "summary.json"), finalSummary);
+console.log(JSON.stringify(finalSummary, null, 2));
+
+function createSummary(final = false) {
+  const materializedResults = results.filter(
+    (result): result is InstanceSummary => result !== undefined,
+  );
   return {
     runId,
     startedAt: startedAt.toISOString(),
-    finishedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    ...(final ? { finishedAt: new Date().toISOString() } : {}),
     model,
     phases,
+    concurrency,
+    contextCompression: config.contextCompression ?? {},
     instanceLimit: limit,
+    completedCount: materializedResults.length,
     datasetPath,
     outputRoot,
-    results,
-    totals: summarizeTotals(results),
+    results: materializedResults,
+    totals: summarizeTotals(materializedResults),
   };
 }
 
@@ -193,10 +239,12 @@ async function runInstance(instance: SweBenchInstance): Promise<InstanceSummary>
         ...loadConfig(),
         apiKey,
         baseUrl: process.env.DEEPSEEK_BASE_URL,
+        userId: createEvalUserId(instance),
         model,
         reasoningEffort: "max",
       },
       MemoryConfig: createMemoryConfig({ cwd: workspace.path }),
+      contextCompressionConfig: config.contextCompression,
       observer: {
         async emit(event) {
           events.push(event);
@@ -258,6 +306,10 @@ function createSweEvalTools(): Tools {
     : tools.filter((tool) =>
       tool.name !== "WebSearch" && tool.name !== "WebFetch"
     );
+}
+
+function createEvalUserId(instance: SweBenchInstance): string {
+  return `swe-${hashShort(`${runId}:${instance.instance_id}`)}-${sanitizeUserId(instance.instance_id)}`;
 }
 
 function renderPrompt(instance: SweBenchInstance, phase: PhaseName): string {
@@ -379,7 +431,13 @@ function summarizeEvents(
     if (event.type === "context_ready") {
       maxEstimatedTokens = Math.max(maxEstimatedTokens, event.estimatedTokens);
       historySnipCount += event.historySnipCount;
-      bulkyToolCompactCount += event.bulkyToolCompactCount;
+      // This is the number of replacements active in this request, not a
+      // cumulative operation count. The same replacements are reported again
+      // on later context_ready events, so summing would overcount them.
+      bulkyToolCompactCount = Math.max(
+        bulkyToolCompactCount,
+        event.bulkyToolCompactCount,
+      );
       continue;
     }
 
@@ -558,6 +616,12 @@ function readBooleanSetting(
   return configValue ?? fallback;
 }
 
+function getCliArgument(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  const value = index >= 0 ? process.argv[index + 1] : undefined;
+  return value && !value.startsWith("-") ? value : undefined;
+}
+
 function computeCacheHitRate(hit: number, miss: number): number {
   const denominator = hit + miss;
   return denominator === 0 ? 0 : hit / denominator;
@@ -606,6 +670,10 @@ function isFileNotFoundError(error: unknown): boolean {
 
 function sanitizePath(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 128) || "instance";
+}
+
+function sanitizeUserId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 96) || "instance";
 }
 
 function hashShort(value: string): string {

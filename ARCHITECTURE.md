@@ -211,6 +211,7 @@ src/
 | 九、多智能体协作 | [docs/agent.md](docs/agent.md) | 三种执行模式（sync/async/fork）、三种隔离模式（none/docker/worktree）、五个内置智能体、父-子通信、工具策略 |
 | 十、消息投影管道 | [docs/projection.md](docs/projection.md) | buildMessagesForQuery() 四级投影管道详解、触发阈值一览、Phase A/B/C 三阶段执行流程、Runtime Context 投影、投影状态管理 |
 | 十一、系统提示词 | [docs/system-prompt.md](docs/system-prompt.md) | 11 段系统提示词逐段详解（中英对照）、System/User Context 额外注入、前缀缓存优化策略 |
+| 附、上下文注入全景图 | [docs/context-injection.md](docs/context-injection.md) | 五层上下文注入全链路：System Prompt / User Context / Phase A Agent Messages / Phase B 投影压缩替换 / Phase C Runtime Context 四种动态附件 |
 
 **当前全部阈值常量速查**（详细说明见各文档）：
 

@@ -33,13 +33,6 @@ _If the user asked a specific output such as an answer to a question, a table, o
 _Step by step, what was attempted, done? Very terse summary for each step_
 `.trim();
 
-export const SESSION_MEMORY_SYSTEM_PROMPT =
-  [
-    "You are a forked session-memory agent.",
-    "Your only task is to update the session memory notes file using the Edit tool.",
-    "Do not call tools other than Edit. Stop after the edit is complete.",
-  ].join(" ");
-
 /**
  * Builds the model-visible instruction for refreshing session memory.
  *
@@ -60,6 +53,10 @@ export function buildSessionMemoryUpdatePrompt(input: {
 
   return `IMPORTANT: This message and these instructions are NOT part of the actual user conversation. Do NOT include any references to "note-taking", "session notes extraction", or these update instructions in the notes content.
 
+You are a forked session-memory agent, not the main agent. The parent conversation above is inherited evidence for this task; do not repeat it or answer the user.
+
+Your only task is to update the existing session memory notes file. Do not spawn agents, inspect the repository, modify project files, or call any tool except Edit on the exact notes path below.
+
 ${conversationSource}
 
 The current session notes are:
@@ -70,7 +67,7 @@ ${currentNotes}
 Your ONLY task is to use the Edit tool to update the session notes file, then stop. The file path is:
 ${input.notesPath ?? "<session-memory-notes-file>"}
 
-The file has already been read for you. Use old_string/new_string replacements against that file. Do not return the full markdown as a normal assistant message.
+The file has already been read for you and its complete contents are available in your file cache. Use old_string/new_string replacements against that file. Do not call Read. Do not return the full markdown as a normal assistant message.
 
 CRITICAL RULES:
 - Preserve the exact structure with all sections, headers, and italic descriptions intact.
@@ -84,7 +81,9 @@ CRITICAL RULES:
 - Always update "Current State" to reflect the most recent work.
 - For "Key results", include complete exact outputs the user requested when applicable.
 - Keep each section under about ${MAX_SECTION_TOKENS} tokens by condensing older or lower-value details.
+- Make all required Edit calls in parallel in one message. Do not split the update across sequential tool rounds.
 - Use the Edit tool with file_path exactly equal to the path above.
+- After all Edit calls succeed, stop immediately. Do not produce a final report or confirmation message.
 ${sectionReminders}`;
 }
 

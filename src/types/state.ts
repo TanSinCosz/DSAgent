@@ -9,7 +9,13 @@ import {
   type AgentNotification,
   type AgentTasksState,
 } from "../Tools/Agent/state.js";
-import type { Message } from "./messages.js";
+import {
+  createBackgroundTaskNotificationsState,
+  createBackgroundTasksState,
+  type BackgroundTaskNotification,
+  type BackgroundTasksState,
+} from "../Tools/Bash/state.js";
+import type { Message, MessageId } from "./messages.js";
 import {
   createSessionMemoryState,
   type SessionMemoryState,
@@ -34,10 +40,32 @@ export interface State {
   toolResultBudgetState: ToolResultBudgetState;
   sessionMemory: SessionMemoryState;
   mode: "default" | "plan";
+  plan?: PlanState;
   agentTasks: AgentTasksState;
   agentNotifications: AgentNotification[];
+  backgroundTasks: BackgroundTasksState;
+  backgroundTaskNotifications: BackgroundTaskNotification[];
   invokedSkills: InvokedSkill[];
   todos: Record<string, TodoList>;
+  longTermMemory: LongTermMemoryState;
+}
+
+export interface PlanState {
+  path: string;
+  content: string;
+  updatedAt: number;
+}
+
+export interface SurfacedLongTermMemoryFile {
+  modifiedAtMs: number;
+  injectedBytes: number;
+}
+
+export interface LongTermMemoryState {
+  surfacedFiles: Record<string, SurfacedLongTermMemoryFile>;
+  surfacedBytes: number;
+  lastExtractedMessageId?: MessageId;
+  retryFromMessageId?: MessageId;
 }
 
 export interface CreateStateOptions {
@@ -48,10 +76,14 @@ export interface CreateStateOptions {
   toolResultBudgetState?: ToolResultBudgetState;
   sessionMemory?: SessionMemoryState;
   mode?: State["mode"];
+  plan?: State["plan"];
   agentTasks?: AgentTasksState;
   agentNotifications?: AgentNotification[];
+  backgroundTasks?: BackgroundTasksState;
+  backgroundTaskNotifications?: BackgroundTaskNotification[];
   invokedSkills?: InvokedSkill[];
   todos?: Record<string, TodoList>;
+  longTermMemory?: LongTermMemoryState;
 }
 
 export function createState(options: CreateStateOptions = {}): State {
@@ -69,10 +101,18 @@ export function createState(options: CreateStateOptions = {}): State {
     },
     sessionMemory: options.sessionMemory ?? createSessionMemoryState(),
     mode: options.mode ?? "default",
+    plan: options.plan,
     agentTasks: options.agentTasks ?? createAgentTasksState(),
     agentNotifications: options.agentNotifications ??
       createAgentNotificationsState(),
+    backgroundTasks: options.backgroundTasks ?? createBackgroundTasksState(),
+    backgroundTaskNotifications: options.backgroundTaskNotifications ??
+      createBackgroundTaskNotificationsState(),
     invokedSkills: options.invokedSkills ?? [],
     todos: options.todos ?? {},
+    longTermMemory: options.longTermMemory ?? {
+      surfacedFiles: {},
+      surfacedBytes: 0,
+    },
   };
 }

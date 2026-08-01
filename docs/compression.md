@@ -80,7 +80,7 @@ buildMessagesForQuery(runtime, state)
   │     目标: 压缩到 DEFAULT_BULKY_TOOL_RESULT_COMPACT_TARGET_CONTEXT_TOKENS (80K)
   │     范围: BULKY_TOOL_NAMES = {Read, Edit, Write, Grep, Glob, WebFetch, ReadSkill}
   │           （Bash 排除，避免截断运行时关键输出）
-  │     策略: 保留头尾各约一半目标字符，中间标记 <tool-result-compact>
+  │     策略: 保留头尾各约一半目标字符，中间标记 <tool-result-compact>；完整内容持久化到 .opencat/tool-results/{sessionId}/{id}
   │
   ├─ ⑦ if shouldCreateHistorySnipBoundary(...):
   │     createHistorySnipBoundary(...) → 写入 state.historySnips[]
@@ -229,17 +229,40 @@ The original result was persisted once and was not re-executed.
 
 ### 6.4 第4级详解：History Snip
 
-**触发条件**（`shouldCreateHistorySnipBoundary()`，`messages.ts:893`）：
+**触发条件**（`shouldCreateHistorySnipBoundary()`，`messages.ts:871`）：`bulkyCompactNeeded` 必须为 true **且** 总投影 Token > 80K（bulky target）。如果本轮最尾消息已有 snip 边界则跳过（防重复）。
+
+**8 次循环 + 回退机制**（`buildMessagesForQuery()` 主循环，第 113-161 行）：
 
 ```typescript
-// ① 如果本消息已有一个 snip 边界 → 跳过
-// ② bulkyCompactNeeded 必须为 true（意味着 bulky compact 无法将上下文压到目标以下）
-// ③ 总 Token 数 > getBulkyToolResultCompactTargetContextTokens() (80K)
+if (shouldCreateHistorySnipBoundary(...)) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (!isContextOverBulkyCompactTarget(deepSeekMessages)) break;  // ≤80K → 退出
+    const boundary = createHistorySnipBoundary(deepSeekMessages, visibleMessages);
+    if (!boundary) break;
+    historySnips.push(boundary);  // 写入 state.historySnips[]
+    // 重新投影以应用新 snip 边界
+    projection = await projectMessagesWithExistingCompressionState(...);
+  }
+
+  // 回退：如果连 snipped 8 次后仍超 120K，放弃所有新增 snip
+  if (historySnipCount > 0 && isContextOverHistorySnipCancelThreshold(deepSeekMessages)) {
+    historySnips.splice(historySnipStartCount);               // 撤销新增 snip
+    if (snapshot) restoreToolResultBudgetState(..., snapshot); // 恢复 budget 快照
+    historySnipCount = 0;
+    projection = await projectMessagesWithExistingCompressionState(...); // 重新投影
+  }
+}
 ```
 
-即：**bulky compact 被判定为 needed 后仍超 80K** 才触发 snip。
+关键设计点：
 
-**两阶段处理**：
+| 机制                      | 说明                                                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **最多 8 次**       | 每次创建一条 snip 边界后立刻重新投影检查；snip 不够可以连续 snipped 最多 8 次                                                                           |
+| **回退阈值 120K**   | `DEFAULT_HISTORY_SNIP_CANCEL_CONTEXT_TOKENS`——如果 snip 后仍超这个数，说明 snip 无法解决问题（可能是超大附件/工具结果），全部回退交给 auto-compress |
+| **budget 快照恢复** | 因为回退会丢失本轮的 bulky compact 结果，需要同步回退`toolResultBudgetState` 到 snip 前的状态                                                         |
+
+**内容筛选**：
 
 1. `createHistorySnipBoundary()` — 遍历保护尾部之前的消息，收集决策：
 
@@ -248,14 +271,14 @@ The original result was persisted once and was not re-executed.
    - 写入 `state.historySnips[]`
 2. `applyHistorySnipBoundaries()` — 在后续投影中应用已存边界：
 
-   - removedMessageIds → 删除整条消息
-   - contentOnlyMessageIds → 保留 content，剥离 tool_calls / reasoning_content
+   - `removedMessageIds` → 删除整条消息
+   - `contentOnlyMessageIds` → 保留 content，剥离 tool_calls / reasoning_content
 
 **可移除的消息类型**（`isHistorySnipRemovableMessage()`）：
 
 - 所有 tool 角色消息
-- assistant 消息（tool_calls 属性被剥离）
-- 可直接重生的 runtime context（`<long_term_memory>`, `*_restore`, `agent_notification`, `agent_message` 等）
+- 含 tool_calls 的 assistant 消息（若 contentOnly 降级后无文本内容，则整条删除）
+- 可再生上下文消息（source 为 `runtime`、`long_term_memory`、`file_restore`、`dynamic_skill`、`todo_list`、`plan_mode`、`agent_notification`、`agent_message`）—— 整条删除，可后续重新生成
 
 **可降级为 content-only 的消息**（`createHistorySnipContentOnlyMessage()`）：
 
@@ -264,9 +287,8 @@ The original result was persisted once and was not re-executed.
 
 **不可触碰的消息**：
 
-- system 消息（系统提示词）
-- plan mode / todo_list 相关消息
-- 最近尾部保护区内所有消息（`calculateProjectionRecentTailStart()` 之后）
+- system 消息（系统提示词）—— 隐式保护，既不能降级也不能移除
+- 最近尾部保护区内所有消息（`calculateProjectionRecentTailStart()` 之后）—— 索引级保护
 
 **边界记录**：`HistorySnipBoundary`（id, removedMessageIds, contentOnlyMessageIds, reason: "prompt_budget", createdAt, createdAtMessageId），写入 `state.historySnips[]`。
 

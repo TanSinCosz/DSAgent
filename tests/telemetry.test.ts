@@ -60,6 +60,7 @@ test("query emits minimal telemetry events when an observer is configured", asyn
       "model_usage",
       "assistant_message",
       "turn_finished",
+      "session_memory_update_finished",
       "long_term_memory_extracted",
       "query_finished",
     ],
@@ -72,7 +73,7 @@ test("query emits minimal telemetry events when an observer is configured", asyn
   );
   assert.equal(
     events.find((event) => event.type === "context_ready")?.messageCount,
-    2,
+    3,
   );
   const usageEvent = events.find((event) => event.type === "model_usage");
   assert.equal(usageEvent?.promptTokens, 100);

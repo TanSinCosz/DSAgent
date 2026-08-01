@@ -85,6 +85,8 @@ export async function updateSessionMemoryForAutoCompress(
       forkContextMessages: options.forkContextMessages,
       readFileState,
       canUseTool: createSessionMemoryCanUseTool(notesPath),
+      useGenericForkPrompt: false,
+      stopAfterSuccessfulToolNames: ["Edit"],
     });
     content = (await readFile(notesPath, "utf8")).trim();
   } catch (error) {
@@ -133,13 +135,8 @@ function createSessionMemoryAgentDefinition(): AgentDefinition {
     model: "inherit",
     permissionMode: "default",
     maxTurns: 4,
-    getSystemPrompt: () =>
-      [
-        "You are a forked session-memory agent.",
-        "Update only the existing session memory notes file.",
-        "Use the Edit tool and stop after the edit is complete.",
-        "Do not answer the user and do not modify project files.",
-      ].join("\n"),
+    // Direct fork mode keeps the complete behavioral prompt in prompts.ts.
+    getSystemPrompt: () => "",
   };
 }
 

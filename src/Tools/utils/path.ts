@@ -1,5 +1,6 @@
 import { homedir } from 'os'
 import { isAbsolute, join, normalize, resolve } from 'path'
+import { getCwd } from './cwd.js'
 
 export function isWindows(): boolean {
     return process.platform === 'win32'
@@ -18,7 +19,7 @@ export function posixPathToWindowsPath(filePath: string): string {
     return `${drive}:\\${rest.replace(/\//g, '\\')}`
 }
 
-export function expandPath(filePath: string, baseDir = process.cwd()): string {
+export function expandPath(filePath: string, baseDir = getCwd()): string {
     if (typeof filePath !== 'string') {
         throw new TypeError(`Path must be a string, received ${typeof filePath}`)
     }

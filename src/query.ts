@@ -21,6 +21,7 @@ import type { Runtime } from "./types/runtime.js";
 import type { State } from "./types/state.js";
 import { streamAssistantWithReasoningContinuation } from "./query/reasoning-continuation.js";
 import {
+  buildPreprojectedMessagesForQuery,
   buildMessagesForQuery,
   getVisibleSnippedContentOnlyStats,
   type SnippedContentOnlyStats,
@@ -49,6 +50,7 @@ import {
   loadDynamicSkillContextForQuery,
   loadRuntimeContextForQuery,
 } from "./query/runtime-context.js";
+import { restorePlan } from "./plan/persistence.js";
 import {
   applyAutoCompression,
 } from "./auto-compress/index.js";
@@ -81,6 +83,7 @@ export {
 } from "./query/runtime-context.js";
 
 const DEFAULT_AUTO_COMPRESS_TRIGGER_TOKENS = 180_000;
+const sessionMemoryUpdateQueues = new WeakMap<State, Promise<void>>();
 
 export async function* query(
   runtime: Runtime,
@@ -113,19 +116,25 @@ export async function* _query(
       await drainPendingAgentMessagesForRuntime(runtime, state);
 
       // Phase B: project first, then compact State only if the request is still too large.
+      const usePreprojectedMessages =
+        turn === 1 && options.usePreprojectedMessagesOnFirstTurn === true;
       const historySnipCountBeforeBuild = state.historySnips.length;
-      let messagesForQuery = await buildMessagesForQuery(runtime, state);
+      let messagesForQuery = usePreprojectedMessages
+        ? await buildPreprojectedMessagesForQuery(runtime, state.Messages)
+        : await buildMessagesForQuery(runtime, state);
       await recordHistorySnipSnapshotIfNeeded(
         runtime,
         state,
         historySnipCountBeforeBuild,
       );
 
-      const autoCompressRequest = getAutoCompressionRequest(
-        runtime,
-        state,
-        messagesForQuery,
-      );
+      const autoCompressRequest = usePreprojectedMessages
+        ? null
+        : getAutoCompressionRequest(
+          runtime,
+          state,
+          messagesForQuery,
+        );
       if (autoCompressRequest) {
         const autoCompressResult = await applyAutoCompressionWithTelemetry(
           runtime,
@@ -144,19 +153,23 @@ export async function* _query(
 
       // Phase C: append volatile/generated context after auto-compress so it is
       // visible to the model but not swallowed by the compaction prompt.
-      await materializeRequestContext(
-        runtime,
-        state,
-        messagesForQuery.forkContextMessages,
-      );
-      const historySnipCountBeforeFinalBuild = state.historySnips.length;
-      messagesForQuery = await buildMessagesForQuery(runtime, state);
-      await recordHistorySnipSnapshotIfNeeded(
-        runtime,
-        state,
-        historySnipCountBeforeFinalBuild,
-      );
-      await recordProjectionSnapshotIfNeeded(runtime, state, messagesForQuery);
+      if (!options.skipRequestContextMaterialization) {
+        await materializeRequestContext(
+          runtime,
+          state,
+          messagesForQuery.forkContextMessages,
+        );
+      }
+      if (!usePreprojectedMessages) {
+        const historySnipCountBeforeFinalBuild = state.historySnips.length;
+        messagesForQuery = await buildMessagesForQuery(runtime, state);
+        await recordHistorySnipSnapshotIfNeeded(
+          runtime,
+          state,
+          historySnipCountBeforeFinalBuild,
+        );
+        await recordProjectionSnapshotIfNeeded(runtime, state, messagesForQuery);
+      }
 
       await emitRunEvent(runtime, {
         type: "context_ready",
@@ -189,6 +202,9 @@ export async function* _query(
         stats: messagesForQuery.stats,
       };
 
+      runtime.lastModelRequestContextMessages = cloneMessagesForFork(
+        messagesForQuery.forkContextMessages,
+      );
       const request = await createStreamRequest(runtime, messagesForQuery.messages);
       throwIfQueryAborted(runtime);
       await emitRunEvent(runtime, { type: "model_stream_started", turn });
@@ -335,6 +351,35 @@ async function updateSessionMemoryAtSafeBoundary(
     return { status: "skipped", reason: "unsupported_runtime" };
   }
 
+  // Match the official sequential post-sampling hook: an overlapping caller
+  // waits for the current update, then rechecks the stateful thresholds.
+  const previous = sessionMemoryUpdateQueues.get(state) ?? Promise.resolve();
+  const update = previous.then(() =>
+    performSessionMemoryUpdateAtSafeBoundary(
+      runtime,
+      state,
+      forkContextMessages,
+    )
+  );
+  const queueTail = update.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionMemoryUpdateQueues.set(state, queueTail);
+  void queueTail.then(() => {
+    if (sessionMemoryUpdateQueues.get(state) === queueTail) {
+      sessionMemoryUpdateQueues.delete(state);
+    }
+  });
+
+  return update;
+}
+
+async function performSessionMemoryUpdateAtSafeBoundary(
+  runtime: Runtime,
+  state: State,
+  forkContextMessages: readonly Message[],
+): Promise<SessionMemoryUpdateResult> {
   const decision = shouldUpdateSessionMemory(state);
   if (decision.update === false) {
     await emitRunEvent(runtime, {
@@ -654,10 +699,15 @@ async function* executeToolCallBatch(
       type: "tool_result",
       toolCall,
       message: toDeepSeekMessage(stateToolResultMessage),
+      succeeded: completed.execution.succeeded,
     };
   }
 
   return persistedToolResultMessages;
+}
+
+function cloneMessagesForFork(messages: readonly Message[]): Message[] {
+  return messages.map((message) => ({ ...message }) as Message);
 }
 
 async function executePreparedToolCallsSerially(
@@ -822,12 +872,17 @@ async function executeToolAfterPermissionDecision(
 async function materializeContextForQuery(
   runtime: Runtime,
   state: State,
-  visibleMessages: readonly Message[],
+  _visibleMessages: readonly Message[],
 ): Promise<number> {
   removePreviousVolatileContextBlocks(state);
+  await restorePlan(runtime, state);
 
   const longTermMemoryMessage = shouldAttachLongTermMemory(state)
-    ? await createLongTermMemoryContextMessage(runtime, visibleMessages)
+    ? await createLongTermMemoryContextMessage(
+      runtime,
+      state.Messages,
+      state.longTermMemory,
+    )
     : null;
   const contextMessage = createProjectionContextStateMessage([
     ...createPlanModeContextBlocks(state),
@@ -929,6 +984,10 @@ function removePreviousVolatileContextBlocks(state: State): number {
 function stripVolatileContextBlocks(content: string): string {
   return content
     .replace(
+      /(?:\r?\n)?<context_block source="long_term_memory">[\s\S]*?<\/context_block>(?:\r?\n)?/g,
+      "\n",
+    )
+    .replace(
       /(?:\r?\n)?<context_block source="dynamic_skill">[\s\S]*?<\/context_block>(?:\r?\n)?/g,
       "\n",
     )
@@ -938,6 +997,14 @@ function stripVolatileContextBlocks(content: string): string {
     )
     .replace(
       /(?:\r?\n)?<context_block source="plan_mode">[\s\S]*?<\/context_block>(?:\r?\n)?/g,
+      "\n",
+    )
+    .replace(
+      /(?:\r?\n)?<context_block source="plan_file">[\s\S]*?<\/context_block>(?:\r?\n)?/g,
+      "\n",
+    )
+    .replace(
+      /(?:\r?\n)?<context_block source="agent_task_status">[\s\S]*?<\/context_block>(?:\r?\n)?/g,
       "\n",
     )
     .replace(/\n{3,}/g, "\n\n")
@@ -995,7 +1062,10 @@ function getAutoCompressionRequest(
     return null;
   }
 
-  if (estimateMessagesForQueryTokens(messagesForQuery) < getAutoCompressTriggerTokens()) {
+  if (
+    estimateMessagesForQueryTokens(messagesForQuery) <
+    getAutoCompressTriggerTokens(runtime)
+  ) {
     return null;
   }
 
@@ -1014,7 +1084,17 @@ function estimateMessagesForQueryTokens(messagesForQuery: MessagesForQuery): num
   return Math.ceil(JSON.stringify(messagesForQuery.messages).length / 4);
 }
 
-function getAutoCompressTriggerTokens(): number {
+function getAutoCompressTriggerTokens(runtime: Runtime): number {
+  const runtimeConfigured = runtime.contextCompressionConfig
+    ?.autoCompressTriggerTokens;
+  if (
+    typeof runtimeConfigured === "number" &&
+    Number.isFinite(runtimeConfigured) &&
+    runtimeConfigured > 0
+  ) {
+    return runtimeConfigured;
+  }
+
   const configured = Number(
     process.env.OPENCAT_AUTO_COMPRESS_TRIGGER_TOKENS,
   );

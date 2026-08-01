@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-import { saveFileMemory } from "../../Memory/file-memory.js";
+import { appendFileMemorySignal } from "../../Memory/file-memory.js";
 import type { Runtime } from "../../types/runtime.js";
 import type { State } from "../../types/state.js";
 import type { Tool, ToolUseContext } from "../types.js";
@@ -39,13 +39,13 @@ export class MemorySave
 
   formatResult({ output }: { output: MemorySaveOutput }): string {
     if (output.results.length === 0) {
-      return "No long-term memory was saved.";
+      return "No long-term memory signal was staged.";
     }
 
     return [
-      `Saved ${output.results.length} long-term memor${
-        output.results.length === 1 ? "y" : "ies"
-      }.`,
+      `Staged ${output.results.length} long-term memory signal${
+        output.results.length === 1 ? "" : "s"
+      } for manual AutoDream consolidation.`,
       ...output.results.map((result) => `- ${result.id}: ${result.memory}`),
     ].join("\n");
   }
@@ -56,10 +56,11 @@ export class MemorySave
     runtime: Runtime,
     _state: State,
   ): Promise<MemorySaveOutput> {
-    return saveFileMemory(runtime, {
+    return appendFileMemorySignal(runtime, {
       memory: input.memory,
       reason: input.reason,
       type: input.memoryType,
+      operation: input.operation,
     });
   }
 }

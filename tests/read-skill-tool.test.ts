@@ -167,7 +167,11 @@ test("ReadSkill executes context: fork skills in a forked agent", async () => {
   assert.equal(streamRequests.length, 1);
   assert.deepEqual(
     (streamRequests[0]?.tools ?? []).map((tool) => tool.function.name),
-    ["Read", "Grep"],
+    runtime.tools.map((tool) => tool.name),
+  );
+  assert.match(
+    streamRequests[0]?.messages.at(-1)?.content ?? "",
+    /Available tools: Read, Grep/,
   );
   assert.match(
     streamRequests[0]?.messages.at(-1)?.content ?? "",

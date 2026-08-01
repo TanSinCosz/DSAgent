@@ -5,11 +5,17 @@ export const inputSchema = () =>
     memory: z
       .string()
       .min(1)
-      .describe("The exact durable memory the user asked to add. Prefer one fact per call."),
+      .describe("A self-contained durable memory for future conversations. Prefer one fact per call."),
     memoryType: z
       .enum(["user", "feedback", "project", "reference"])
       .optional()
       .describe("Optional memory category. Defaults to user."),
+    operation: z
+      .enum(["save", "correct", "forget"])
+      .optional()
+      .describe(
+        "Append a durable save, correction, or forget signal. Defaults to save.",
+      ),
     reason: z
       .string()
       .optional()

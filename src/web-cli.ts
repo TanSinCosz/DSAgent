@@ -28,7 +28,9 @@ import { formatErrorForUser } from "./deepseek/errors.js";
 import {
   createSweBenchSessionId,
   getSweWorkspaceStatus,
+  parseSweBenchSessionInfo,
   parseSweBenchSessionId,
+  type SweWorkspaceOptions,
   type SweWorkspaceStatusValue,
 } from "./swe/workspace.js";
 import { createSessionId } from "./utils/session.js";
@@ -60,6 +62,7 @@ type TranscriptHydrationMode = "auto" | "full";
 interface WebCliSession {
   runtime: Runtime;
   state: State;
+  sweDatasetDir: string;
   busy: boolean;
   clientAttached: boolean;
   activeQueryAbortController?: AbortController;
@@ -120,14 +123,20 @@ interface CreateWebCliSessionOptions {
   sessionId?: string;
   resume: boolean;
   cwd?: string;
+  sweDatasetDir?: string;
 }
 
 async function createWebCliSession(
   options: CreateWebCliSessionOptions,
 ): Promise<WebCliSession> {
   const sessionId = options.sessionId ?? createSessionId();
+  const sweDatasetDir = resolveSweDatasetDirectoryForSession(
+    process.cwd(),
+    sessionId,
+    options.sweDatasetDir,
+  );
   const runtimeCwd = options.cwd ??
-    await resolveSessionRuntimeCwd(sessionId) ??
+    await resolveSessionRuntimeCwd(sessionId, sweDatasetDir) ??
     process.cwd();
   const { tools, mcpConnections } = await createToolsWithConfiguredMcp(runtimeCwd);
   const transcriptStore = createTranscriptStore({
@@ -160,6 +169,7 @@ async function createWebCliSession(
   return {
     runtime,
     state,
+    sweDatasetDir,
     busy: false,
     clientAttached: false,
     pendingToolApprovals: new Map(),
@@ -175,18 +185,26 @@ async function createWebCliSession(
 
 async function resolveSessionRuntimeCwd(
   sessionId: string,
+  sweDatasetDir?: string,
 ): Promise<string | undefined> {
   const instanceId = parseSweBenchSessionId(sessionId);
   if (!instanceId) {
     return undefined;
   }
 
-  const instance = await findSweBenchInstance(process.cwd(), instanceId);
+  const instance = await findSweBenchInstance(
+    process.cwd(),
+    instanceId,
+    resolveSweDatasetDirectoryForSession(process.cwd(), sessionId, sweDatasetDir),
+  );
   if (!instance) {
     return undefined;
   }
 
-  const workspace = await getSweWorkspaceStatus(instance);
+  const workspace = await getSweWorkspaceStatus(
+    instance,
+    await createSweWorkspaceOptions(process.cwd(), sweDatasetDir),
+  );
   return isUsableSweWorkspaceStatus(workspace.status)
     ? workspace.path
     : undefined;
@@ -262,15 +280,27 @@ async function hasMainTranscriptSession(
     .some((item) => item.sessionId === sessionId);
 }
 
-async function listSweBenchItems(cwd: string): Promise<SweBenchItem[]> {
-  const instances = await loadSweBenchInstances(cwd);
+async function listSweBenchItems(
+  cwd: string,
+  sweDatasetDir?: string,
+): Promise<SweBenchItem[]> {
+  const datasetDirectory = resolveSweDatasetDirectoryForSession(
+    cwd,
+    "",
+    sweDatasetDir,
+  );
+  const workspaceOptions = await createSweWorkspaceOptions(cwd, datasetDirectory);
+  const instances = await loadSweBenchInstances(cwd, datasetDirectory);
   const sessions = new Set(
     (await listMainTranscriptSessions(cwd)).map((item) => item.sessionId),
   );
 
   return await Promise.all(instances.map(async (instance) => {
-    const sessionId = createSweBenchSessionId(instance.instance_id);
-    const workspace = await getSweWorkspaceStatus(instance);
+    const sessionId = createSweBenchSessionId(
+      instance.instance_id,
+      workspaceOptions.workspaceNamespace,
+    );
+    const workspace = await getSweWorkspaceStatus(instance, workspaceOptions);
     return {
       instanceId: instance.instance_id,
       repo: instance.repo,
@@ -286,14 +316,19 @@ async function listSweBenchItems(cwd: string): Promise<SweBenchItem[]> {
 async function findSweBenchInstance(
   cwd: string,
   instanceId: string,
+  sweDatasetDir?: string,
 ): Promise<SweBenchInstance | undefined> {
-  return (await loadSweBenchInstances(cwd))
+  return (await loadSweBenchInstances(cwd, sweDatasetDir))
     .find((instance) => instance.instance_id === instanceId);
 }
 
-async function loadSweBenchInstances(cwd: string): Promise<SweBenchInstance[]> {
+async function loadSweBenchInstances(
+  cwd: string,
+  sweDatasetDir?: string,
+): Promise<SweBenchInstance[]> {
+  const evalDirectory = resolveSweEvalDirectory(cwd, sweDatasetDir);
   const config = await readJsonFile<Record<string, unknown>>(
-    join(cwd, SWE_EVAL_DIR, "config.json"),
+    join(evalDirectory, "config.json"),
   );
   const configuredDatasetPath = typeof config?.datasetPath === "string"
     ? config.datasetPath
@@ -302,11 +337,53 @@ async function loadSweBenchInstances(cwd: string): Promise<SweBenchInstance[]> {
     ? (isAbsolute(configuredDatasetPath)
       ? configuredDatasetPath
       : join(cwd, configuredDatasetPath))
-    : join(cwd, SWE_EVAL_DIR, "dataset.jsonl");
+    : join(evalDirectory, "dataset.jsonl");
   const records = await readJsonlOrArray<SweBenchInstance>(datasetPath);
 
   return records
     .filter(isSweBenchInstance);
+}
+
+function resolveSweEvalDirectory(cwd: string, configured?: string): string {
+  const requested = configured?.trim() ||
+    process.env.OPENCAT_SWE_EVAL_DIR?.trim() ||
+    SWE_EVAL_DIR;
+  const resolved = isAbsolute(requested) ? requested : join(cwd, requested);
+  const evalRoot = join(cwd, ".opencat", "evals");
+  const normalized = resolved.replace(/[\\/]$/, "");
+  return normalized === evalRoot || normalized.startsWith(evalRoot + "\\") ||
+      normalized.startsWith(evalRoot + "/")
+    ? normalized
+    : join(cwd, SWE_EVAL_DIR);
+}
+
+function resolveSweDatasetDirectoryForSession(
+  cwd: string,
+  sessionId: string,
+  configured?: string,
+): string {
+  const sessionNamespace = parseSweBenchSessionInfo(sessionId)?.workspaceNamespace;
+  return resolveSweEvalDirectory(cwd, configured ?? sessionNamespace);
+}
+
+async function createSweWorkspaceOptions(
+  cwd: string,
+  datasetDir?: string,
+): Promise<SweWorkspaceOptions> {
+  const evalDirectory = resolveSweEvalDirectory(cwd, datasetDir);
+  const config = await readJsonFile<Record<string, unknown>>(
+    join(evalDirectory, "config.json"),
+  );
+  return {
+    projectRoot: cwd,
+    reposDir: typeof config?.reposDir === "string" ? config.reposDir.trim() : undefined,
+    allowNetworkClone: config?.allowNetworkClone === true ||
+      config?.allowNetworkClone === "true" ||
+      config?.allowNetworkClone === "1",
+    workspaceNamespace: typeof config?.workspaceNamespace === "string"
+      ? config.workspaceNamespace.trim() || undefined
+      : undefined,
+  };
 }
 
 async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
@@ -357,7 +434,11 @@ async function getCurrentSweSessionInfo(): Promise<{
     return null;
   }
 
-  const instance = await findSweBenchInstance(process.cwd(), instanceId);
+  const instance = await findSweBenchInstance(
+    process.cwd(),
+    instanceId,
+    session.sweDatasetDir,
+  );
   if (!instance) {
     return {
       instanceId,
@@ -366,7 +447,10 @@ async function getCurrentSweSessionInfo(): Promise<{
     };
   }
 
-  const workspace = await getSweWorkspaceStatus(instance);
+  const workspace = await getSweWorkspaceStatus(
+    instance,
+    await createSweWorkspaceOptions(process.cwd(), session.sweDatasetDir),
+  );
   return {
     instanceId,
     workspaceReady: isUsableSweWorkspaceStatus(workspace.status),
@@ -412,7 +496,7 @@ async function exportCurrentSwePatch(): Promise<{
   const patch = String(stdout);
   const savedPath = patch.trim().length === 0
     ? undefined
-    : await saveSwePatchFile(swe.instanceId, patch);
+    : await saveSwePatchFile(swe.instanceId, patch, session.sweDatasetDir);
 
   return {
     ok: true,
@@ -428,18 +512,22 @@ async function exportCurrentSwePatch(): Promise<{
 async function saveSwePatchFile(
   instanceId: string,
   patch: string,
+  datasetDir?: string,
 ): Promise<string> {
-  const directory = resolveSwePatchDirectory();
+  const directory = resolveSwePatchDirectory(datasetDir);
   await mkdir(directory, { recursive: true });
   const filePath = join(directory, `${sanitizePatchFileName(instanceId)}.patch`);
   await writeFile(filePath, patch, "utf8");
   return filePath;
 }
 
-function resolveSwePatchDirectory(): string {
+function resolveSwePatchDirectory(datasetDir?: string): string {
   const configured = process.env.OPENCAT_SWE_PATCH_DIR?.trim();
   if (!configured) {
-    return join(process.cwd(), SWE_EVAL_DIR, "patches");
+    return join(
+      resolveSweEvalDirectory(process.cwd(), datasetDir),
+      "patches",
+    );
   }
 
   return isAbsolute(configured) ? configured : join(process.cwd(), configured);
@@ -559,7 +647,10 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/swe/items") {
       sendJson(response, {
-        items: await listSweBenchItems(process.cwd()),
+        items: await listSweBenchItems(
+          process.cwd(),
+          url.searchParams.get("datasetDir") ?? undefined,
+        ),
       });
       return;
     }
@@ -567,7 +658,11 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/swe/prompt") {
       const instanceId = url.searchParams.get("instanceId")?.trim() ?? "";
       const kind = parseSweDraftKind(url.searchParams.get("kind"));
-      const instance = await findSweBenchInstance(process.cwd(), instanceId);
+      const instance = await findSweBenchInstance(
+        process.cwd(),
+        instanceId,
+        url.searchParams.get("datasetDir") ?? undefined,
+      );
       if (!instance) {
         sendJson(response, { error: "SWE item not found." }, 404);
         return;
@@ -582,18 +677,40 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/swe/session") {
-      const body = await readJsonBody<{ instanceId?: unknown }>(request);
+      const body = await readJsonBody<{
+        instanceId?: unknown;
+        datasetDir?: unknown;
+      }>(request);
       const instanceId = typeof body.instanceId === "string"
         ? body.instanceId.trim()
         : "";
-      const instance = await findSweBenchInstance(process.cwd(), instanceId);
+      const datasetDir = typeof body.datasetDir === "string"
+        ? body.datasetDir.trim()
+        : undefined;
+      const instance = await findSweBenchInstance(
+        process.cwd(),
+        instanceId,
+        datasetDir,
+      );
       if (!instance) {
         sendJson(response, { error: "SWE item not found." }, 404);
         return;
       }
 
-      const sessionId = createSweBenchSessionId(instance.instance_id);
-      const workspace = await getSweWorkspaceStatus(instance);
+      const datasetDirectory = resolveSweDatasetDirectoryForSession(
+        process.cwd(),
+        "",
+        datasetDir,
+      );
+      const workspaceOptions = await createSweWorkspaceOptions(
+        process.cwd(),
+        datasetDirectory,
+      );
+      const sessionId = createSweBenchSessionId(
+        instance.instance_id,
+        workspaceOptions.workspaceNamespace,
+      );
+      const workspace = await getSweWorkspaceStatus(instance, workspaceOptions);
       const workspacePath = isUsableSweWorkspaceStatus(workspace.status)
         ? workspace.path
         : undefined;
@@ -603,6 +720,7 @@ const server = createServer(async (request, response) => {
         sessionId,
         resume: existed,
         cwd: workspacePath ?? process.cwd(),
+        sweDatasetDir: datasetDirectory,
       });
 
       sendJson(response, {
@@ -610,6 +728,7 @@ const server = createServer(async (request, response) => {
         sessionId: session.runtime.sessionId,
         existed,
         workspaceReady: Boolean(workspacePath),
+        datasetDir: datasetDirectory,
         messageCount: session.state.Messages.length,
       });
       return;
@@ -2200,6 +2319,7 @@ function renderHtml(): string {
       let assistantTextBuffer = "";
       let assistantRenderFrame = 0;
       let currentSessionId = "";
+      let sweDatasetDir = new URLSearchParams(window.location.search).get("datasetDir") || "";
       let currentSweSession = null;
       let isBusy = false;
       let isSessionLoading = false;
@@ -2233,13 +2353,15 @@ function renderHtml(): string {
         var instanceId = params.get("swe");
         if (!instanceId) return;
         var draftKind = params.get("draft") || "";
+        sweDatasetDir = params.get("datasetDir") || sweDatasetDir;
 
-        var payload = await openSweSession(instanceId);
+        var payload = await openSweSession(instanceId, sweDatasetDir);
         if (draftKind && payload && Number(payload.messageCount || 0) === 0) {
-          await fillSweDraftPrompt(instanceId, draftKind);
+          await fillSweDraftPrompt(instanceId, draftKind, sweDatasetDir);
         }
         params.delete("swe");
         params.delete("draft");
+        params.delete("datasetDir");
         var nextSearch = params.toString();
         var nextUrl = window.location.pathname + (nextSearch ? "?" + nextSearch : "") + window.location.hash;
         window.history.replaceState(null, "", nextUrl);
@@ -2548,7 +2670,10 @@ function renderHtml(): string {
 
       async function populateSweItems() {
         try {
-          var response = await fetch("/api/swe/items");
+          var datasetQuery = sweDatasetDir
+            ? "?datasetDir=" + encodeURIComponent(sweDatasetDir)
+            : "";
+          var response = await fetch("/api/swe/items" + datasetQuery);
           if (!response.ok) return;
           var payload = await response.json();
           var items = payload.items || [];
@@ -2573,7 +2698,7 @@ function renderHtml(): string {
               escapeHtml(item.workspaceStatus || "missing") + '</span><span>' +
               (item.hasSession ? "session" : "new") + '</span></div>';
             div.addEventListener("click", function(instanceId) {
-              return function() { openSweSession(instanceId); };
+              return function() { openSweSession(instanceId, sweDatasetDir); };
             }(item.instanceId));
             sweList.append(div);
           }
@@ -2582,15 +2707,16 @@ function renderHtml(): string {
         }
       }
 
-      async function openSweSession(instanceId) {
+      async function openSweSession(instanceId, datasetDir) {
         if (!instanceId || isSessionLoading) return null;
+        sweDatasetDir = datasetDir || sweDatasetDir;
         detachCurrentStream();
         setSessionLoading(true);
         try {
           var response = await fetch("/api/swe/session", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ instanceId: instanceId }),
+            body: JSON.stringify({ instanceId: instanceId, datasetDir: sweDatasetDir }),
           });
           if (!response.ok) {
             var errorPayload = await response.json().catch(function() { return {}; });
@@ -2618,12 +2744,13 @@ function renderHtml(): string {
         }
       }
 
-      async function fillSweDraftPrompt(instanceId, kind) {
+      async function fillSweDraftPrompt(instanceId, kind, datasetDir) {
         if (promptInput.value.trim()) return;
         try {
           var response = await fetch(
             "/api/swe/prompt?instanceId=" + encodeURIComponent(instanceId) +
-              "&kind=" + encodeURIComponent(kind || "investigate"),
+              "&kind=" + encodeURIComponent(kind || "investigate") +
+              "&datasetDir=" + encodeURIComponent(datasetDir || sweDatasetDir),
           );
           if (!response.ok) return;
           var payload = await response.json();

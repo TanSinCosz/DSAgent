@@ -132,11 +132,16 @@ function toOpenAICreateRequest(
     tools: input.tools?.map(toOpenAITool),
     logprobs: input.logprobs ?? undefined,
     top_logprobs: input.top_logprobs ?? undefined,
-    user: input.user_id ?? undefined,
     metadata: input.metadata,
     frequency_penalty: input.frequency_penalty ?? undefined,
     presence_penalty: input.presence_penalty ?? undefined,
   };
+
+  // DeepSeek uses the custom `user_id` field for scheduling and KV-cache
+  // isolation. OpenAI's standard `user` field is a different field.
+  if (input.user_id) {
+    request.user_id = input.user_id;
+  }
 
   const toolChoice = toOpenAIToolChoice(input.tool_choice ?? undefined);
   if (toolChoice !== undefined) {

@@ -13,7 +13,10 @@ import {
   drainAgentMessages,
   queueAgentMessage,
 } from "../src/Tools/Agent/state.js";
-import type { AgentOutput } from "../src/Tools/Agent/runner.js";
+import {
+  runAgentTask,
+  type AgentOutput,
+} from "../src/Tools/Agent/runner.js";
 import type { DeepSeekClient } from "../src/deepseek/client.js";
 import type {
   DeepSeekChatCompletionResponse,
@@ -194,7 +197,7 @@ test("Agent tool fork mode drops incomplete parent tool calls", async () => {
   );
 });
 
-test("Agent tool fork mode inherits parent state projection context", async () => {
+test("Agent tool fork mode does not inherit unmaterialized parent mutable state", async () => {
   const harness = createHarness({
     parentMessages: [
       createMessage({
@@ -210,12 +213,23 @@ test("Agent tool fork mode inherits parent state projection context", async () =
       content: "<runtime-context>fork-visible context</runtime-context>",
     }, { source: "runtime" }),
   );
+  harness.state.todos.main = [{
+    content: "Parent-owned todo",
+    activeForm: "Working on the parent-owned todo",
+    status: "in_progress",
+  }];
+  harness.state.mode = "plan";
+  harness.state.plan = {
+    path: "parent-plan.md",
+    content: "PARENT_PLAN_CONTENT",
+    updatedAt: Date.now(),
+  };
   const agent = findAgentTool(harness.runtime);
 
   const output = await agent.call(
     {
-      prompt: "inspect inherited state",
-      description: "fork state",
+      prompt: "inspect the supplied conversation only",
+      description: "isolated fork state",
       execution_mode: "fork",
     },
     harness.runtime.toolUseContext,
@@ -225,10 +239,15 @@ test("Agent tool fork mode inherits parent state projection context", async () =
 
   assert.equal(output.status, "completed");
   assert.equal(output.mode, "fork");
-  assert.match(
-    JSON.stringify(harness.streamRequests[0]?.messages),
-    /fork-visible context/,
-  );
+  const requestText = JSON.stringify(harness.streamRequests[0]?.messages);
+  assert.doesNotMatch(requestText, /fork-visible context/);
+  assert.doesNotMatch(requestText, /Parent-owned todo/);
+  assert.doesNotMatch(requestText, /PARENT_PLAN_CONTENT/);
+  assert.doesNotMatch(requestText, /<plan_mode>/);
+  assert.equal(harness.state.runtimeContextMessages.length, 1);
+  assert.equal(harness.state.todos.main?.[0]?.content, "Parent-owned todo");
+  assert.equal(harness.state.mode, "plan");
+  assert.equal(harness.state.plan?.content, "PARENT_PLAN_CONTENT");
 });
 
 test("Agent tool fork request preserves parent prompt prefix for cache reuse", async () => {
@@ -249,6 +268,12 @@ test("Agent tool fork request preserves parent prompt prefix for cache reuse", a
     ],
     streams: [[textChunk("fork cache complete")]],
   });
+  harness.runtime.systemContext = {
+    cacheMarker: "frozen parent system context",
+  };
+  harness.runtime.userContext = {
+    cacheMarker: "frozen parent user context",
+  };
   const parentMessagesForQuery = await buildMessagesForQuery(
     harness.runtime,
     harness.state,
@@ -257,6 +282,8 @@ test("Agent tool fork request preserves parent prompt prefix for cache reuse", a
     harness.runtime,
     parentMessagesForQuery.messages,
   );
+  harness.runtime.lastModelRequestContextMessages =
+    parentMessagesForQuery.forkContextMessages;
   const agent = findAgentTool(harness.runtime);
 
   await agent.call(
@@ -274,7 +301,7 @@ test("Agent tool fork request preserves parent prompt prefix for cache reuse", a
   assert.ok(childRequest);
   assert.deepEqual(
     getRequestToolNames(childRequest),
-    getRequestToolNames(parentRequest).filter((toolName) => toolName !== "Agent"),
+    getRequestToolNames(parentRequest),
   );
   assert.deepEqual(
     childRequest.messages.slice(0, parentRequest.messages.length),
@@ -292,6 +319,142 @@ test("Agent tool fork request preserves parent prompt prefix for cache reuse", a
     childRequest.messages[parentRequest.messages.length]?.content ?? "",
     /parent-agent tools/,
   );
+});
+
+test("fork exposes the parent tool schema but enforces the child allow-list", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "opencat-agent-fork-policy-"));
+  const filePath = join(cwd, "written-by-fork.txt");
+  const harness = createHarness({
+    cwd,
+    parentMessages: [
+      createMessage({
+        role: "user",
+        content: "stable parent prefix",
+      }),
+    ],
+    streams: [
+      [
+        toolCallChunk("call_disallowed_read", "Read", {
+          file_path: filePath,
+        }),
+      ],
+      [
+        toolCallChunk("call_allowed_write", "Write", {
+          file_path: filePath,
+          content: "written\n",
+        }),
+      ],
+    ],
+  });
+  harness.runtime.lastModelRequestContextMessages = [
+    ...harness.state.Messages,
+  ];
+
+  await runAgentTask({
+    parentRuntime: harness.runtime,
+    parentState: harness.state,
+    agentDefinition: {
+      agentType: "one_shot_writer",
+      category: "worker",
+      source: "built-in",
+      whenToUse: "Test a restricted cache-safe fork.",
+      tools: ["Write"],
+      model: "inherit",
+      maxTurns: 4,
+      getSystemPrompt: () => "Write one file.",
+    },
+    prompt: "Write the target file.",
+    description: "restricted fork",
+    mode: "fork",
+    isolation: "none",
+    stopAfterSuccessfulToolNames: ["Write"],
+  });
+
+  assert.equal(harness.streamRequests.length, 2);
+  assert.deepEqual(
+    getRequestToolNames(harness.streamRequests[0]),
+    harness.runtime.tools.map((tool) => tool.name),
+  );
+  assert.match(
+    JSON.stringify(harness.streamRequests[1]?.messages),
+    /outside the allowed tool policy/,
+  );
+  const firstRequestText = JSON.stringify(harness.streamRequests[0]?.messages);
+  assert.match(firstRequestText, /Write one file\./);
+  assert.match(firstRequestText, /one-shot tool task/);
+  assert.doesNotMatch(firstRequestText, /Output format:/);
+  assert.equal(await readFile(filePath, "utf8"), "written\n");
+});
+
+test("one-shot fork stops after its first successful target tool turn", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "opencat-agent-one-shot-"));
+  const filePath = join(cwd, "one-shot.txt");
+  const harness = createHarness({
+    cwd,
+    streams: [
+      [
+        toolCallChunk("call_one_shot_write", "Write", {
+          file_path: filePath,
+          content: "done\n",
+        }),
+      ],
+      [textChunk("this confirmation request must not happen")],
+    ],
+  });
+
+  await runAgentTask({
+    parentRuntime: harness.runtime,
+    parentState: harness.state,
+    agentDefinition: {
+      agentType: "one_shot_writer",
+      category: "worker",
+      source: "built-in",
+      whenToUse: "Test one-shot completion.",
+      tools: ["Write"],
+      model: "inherit",
+      maxTurns: 4,
+      getSystemPrompt: () => "Write the complete result once.",
+    },
+    prompt: "Write the target file.",
+    description: "one-shot fork",
+    mode: "fork",
+    isolation: "none",
+    stopAfterSuccessfulToolNames: ["Write"],
+  });
+
+  assert.equal(harness.streamRequests.length, 1);
+  assert.equal(await readFile(filePath, "utf8"), "done\n");
+});
+
+test("direct fork prompt skips the generic worker wrapper", async () => {
+  const harness = createHarness({
+    streams: [[textChunk("direct fork complete")]],
+  });
+
+  await runAgentTask({
+    parentRuntime: harness.runtime,
+    parentState: harness.state,
+    agentDefinition: {
+      agentType: "direct_internal_task",
+      category: "worker",
+      source: "built-in",
+      whenToUse: "Test a direct internal fork.",
+      tools: [],
+      model: "inherit",
+      maxTurns: 1,
+      getSystemPrompt: () => "This generic definition must not be injected.",
+    },
+    prompt: "Run only this direct internal task.",
+    description: "direct internal fork",
+    mode: "fork",
+    isolation: "none",
+    useGenericForkPrompt: false,
+  });
+
+  const finalPrompt = harness.streamRequests[0]?.messages.at(-1)?.content ?? "";
+  assert.equal(finalPrompt, "Run only this direct internal task.");
+  assert.doesNotMatch(finalPrompt, /<fork_worker>/);
+  assert.doesNotMatch(finalPrompt, /generic definition must not be injected/i);
 });
 
 test("Agent tool async mode registers task lifecycle and notification", async () => {

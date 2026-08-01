@@ -46,7 +46,11 @@ _fix_*.cjs
 
 # Local reference/runtime folders
 src/src/
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/swe-session-auditor/
+!.claude/skills/swe-session-auditor/**
 .skill/
 
 # Local Python artifacts
