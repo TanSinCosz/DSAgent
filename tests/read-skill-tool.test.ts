@@ -5,12 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type {
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import { restoreInvokedSkillsAfterAutoCompress } from "../src/auto-compress/invoked-skill-restore.js";
 import { ReadSkill } from "../src/Tools/ReadSkill/ReadSkill.js";
 import { addSkillDirectories } from "../src/Tools/utils/discoverSkillsForReadPath.js";
@@ -22,12 +22,12 @@ test("ReadSkill reads only discovered skills and records invoked skill state", a
   const state = createState();
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createUnusedClient(),
+    modelClient: createUnusedClient(),
     MemoryConfig: createMemoryConfig(),
   });
   runtime.toolUseContext.skillRuntime.dynamicSkills.set("repo-style", {
@@ -86,12 +86,12 @@ test("ReadSkill activates allowed-tools as temporary command allow rules", async
   const state = createState();
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createUnusedClient(),
+    modelClient: createUnusedClient(),
     MemoryConfig: createMemoryConfig(),
   });
   await addSkillDirectories([skillRoot], runtime.toolUseContext.skillRuntime);
@@ -141,15 +141,15 @@ test("ReadSkill executes context: fork skills in a forked agent", async () => {
   );
 
   const state = createState();
-  const streamRequests: DeepSeekStreamRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createTextClient("fork skill done", streamRequests),
+    modelClient: createTextClient("fork skill done", streamRequests),
     MemoryConfig: createMemoryConfig(),
   });
   await addSkillDirectories([skillRoot], runtime.toolUseContext.skillRuntime);
@@ -204,12 +204,12 @@ test("post auto-compress restore reattaches invoked skills once", async () => {
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createUnusedClient(),
+    modelClient: createUnusedClient(),
     MemoryConfig: createMemoryConfig(),
   });
 
@@ -258,13 +258,13 @@ function createUnusedClient() {
 
 function createTextClient(
   text: string,
-  streamRequests: DeepSeekStreamRequest[],
-): DeepSeekClient {
+  streamRequests: ModelStreamRequest[],
+): OpenAICompatibleClient {
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       streamRequests.push(input);
       yield {
         raw: text,

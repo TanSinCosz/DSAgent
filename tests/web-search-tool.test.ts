@@ -65,7 +65,7 @@ test("WebSearch calls the DeepSeek Anthropic server tool and filters results", a
   });
   const state = createState();
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-pro",
       maxTokens: 4_096,
@@ -115,7 +115,7 @@ test("WebSearch surfaces HTTP errors without leaking unbounded responses", async
   });
   const state = createState();
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-pro",
       maxTokens: 4_096,

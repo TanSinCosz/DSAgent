@@ -1,11 +1,20 @@
 
+import {
+  resolveModelProvider,
+  type ModelProvider,
+} from "../openai-compatible/provider.js";
+
 export interface AgentConfig {
   model: string;
   apiBaseUrl: string;
   apiKeyEnvVar: string;
 }
 
-export interface DeepSeekRuntimeSettings {
+export interface ModelRuntimeSettings {
+  /** Named profile selected from ~/.opencat/config.yaml, when configured. */
+  profileName?: string;
+  /** Selects the provider adapter used to filter non-standard API fields. */
+  provider?: ModelProvider;
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -17,15 +26,12 @@ export interface DeepSeekRuntimeSettings {
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
 }
 
-export const FORCED_DEEPSEEK_MODEL = "deepseek-v4-pro";
-export const FORCED_DEEPSEEK_REASONING_EFFORT = "max";
-
-export function forceDeepSeekRuntimeSettings(
-  settings: DeepSeekRuntimeSettings,
-): DeepSeekRuntimeSettings {
+export function normalizeModelRuntimeSettings(
+  settings: ModelRuntimeSettings,
+): ModelRuntimeSettings {
+  const provider = resolveModelProvider(settings);
   return {
     ...settings,
-    model: FORCED_DEEPSEEK_MODEL,
-    reasoningEffort: FORCED_DEEPSEEK_REASONING_EFFORT,
+    provider,
   };
 }

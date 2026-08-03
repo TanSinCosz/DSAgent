@@ -1,4 +1,6 @@
-export type DeepSeekApiErrorCategory =
+import type { ModelProvider } from "./provider.js";
+
+export type OpenAICompatibleApiErrorCategory =
   | "format_error"
   | "authentication_failed"
   | "insufficient_balance"
@@ -8,47 +10,62 @@ export type DeepSeekApiErrorCategory =
   | "server_busy"
   | "unknown";
 
-type DeepSeekApiErrorInfo = {
-  category: DeepSeekApiErrorCategory;
+type ApiErrorInfo = {
+  category: OpenAICompatibleApiErrorCategory;
   title: string;
   cause: string;
   suggestion: string;
   retryable: boolean;
 };
 
-export class DeepSeekApiError extends Error {
+export class OpenAICompatibleApiError extends Error {
   readonly status?: number;
-  readonly category: DeepSeekApiErrorCategory;
+  readonly category: OpenAICompatibleApiErrorCategory;
   readonly causeText: string;
   readonly suggestion: string;
   readonly retryable: boolean;
   readonly originalMessage?: string;
+  readonly provider: ModelProvider;
 
   constructor(input: {
+    provider: ModelProvider;
+    providerDisplayName: string;
     status?: number;
     originalMessage?: string;
     cause?: unknown;
   }) {
-    const info = classifyDeepSeekApiError(input.status);
-    const message = formatDeepSeekApiErrorMessage({
-      status: input.status,
-      info,
-      originalMessage: input.originalMessage,
-    });
+    const info = classifyApiError(input.status);
+    const lines = [
+      `${input.providerDisplayName} API error: ${info.title}`,
+      `Cause: ${info.cause}`,
+      `Suggestion: ${info.suggestion}`,
+      `Retryable: ${info.retryable ? "yes" : "no"}`,
+      input.originalMessage ? `Original: ${input.originalMessage}` : undefined,
+    ].filter(Boolean);
 
-    super(message, input.cause === undefined ? undefined : { cause: input.cause });
-    this.name = "DeepSeekApiError";
+    super(
+      lines.join("\n"),
+      input.cause === undefined ? undefined : { cause: input.cause },
+    );
+    this.name = "OpenAICompatibleApiError";
     this.status = input.status;
     this.category = info.category;
     this.causeText = info.cause;
     this.suggestion = info.suggestion;
     this.retryable = info.retryable;
     this.originalMessage = input.originalMessage;
+    this.provider = input.provider;
   }
 }
 
-export function normalizeDeepSeekApiError(error: unknown): Error {
-  if (error instanceof DeepSeekApiError) {
+export function normalizeOpenAICompatibleApiError(
+  error: unknown,
+  options: {
+    provider: ModelProvider;
+    providerDisplayName: string;
+  },
+): Error {
+  if (error instanceof OpenAICompatibleApiError) {
     return error;
   }
 
@@ -57,28 +74,26 @@ export function normalizeDeepSeekApiError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error));
   }
 
-  return new DeepSeekApiError({
+  return new OpenAICompatibleApiError({
+    ...options,
     status,
     originalMessage: readErrorMessage(error),
     cause: error,
   });
 }
 
-export function formatErrorForUser(error: unknown): string {
-  const normalized = normalizeDeepSeekApiError(error);
-  return normalized.message;
+export function formatOpenAICompatibleErrorForUser(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function classifyDeepSeekApiError(
-  status: number | undefined,
-): DeepSeekApiErrorInfo {
+function classifyApiError(status: number | undefined): ApiErrorInfo {
   switch (status) {
     case 400:
       return {
         category: "format_error",
         title: "400 - Request format error",
         cause: "The request body format is invalid.",
-        suggestion: "Check the request payload and schema conversion.",
+        suggestion: "Check the provider profile, request payload, and schema conversion.",
         retryable: false,
       };
     case 401:
@@ -86,15 +101,15 @@ function classifyDeepSeekApiError(
         category: "authentication_failed",
         title: "401 - Authentication failed",
         cause: "The API key is missing, invalid, or rejected.",
-        suggestion: "Check DEEPSEEK_API_KEY / OPENAI_API_KEY and restart the process.",
+        suggestion: "Check the configured provider API key and restart the process.",
         retryable: false,
       };
     case 402:
       return {
         category: "insufficient_balance",
         title: "402 - Insufficient balance",
-        cause: "The account balance is insufficient.",
-        suggestion: "Recharge the DeepSeek account or switch to a funded key.",
+        cause: "The provider account balance is insufficient.",
+        suggestion: "Recharge the provider account or switch to a funded key.",
         retryable: false,
       };
     case 422:
@@ -102,72 +117,55 @@ function classifyDeepSeekApiError(
         category: "parameter_error",
         title: "422 - Parameter error",
         cause: "One or more request parameters are invalid.",
-        suggestion: "Check model name, max_tokens, tools, prefix/beta settings, and message fields.",
+        suggestion: "Check the model, tools, message fields, and provider extensions.",
         retryable: false,
       };
     case 429:
       return {
         category: "rate_limited",
         title: "429 - Rate limit reached",
-        cause: "TPM or RPM request rate reached the account limit.",
-        suggestion: "Reduce concurrency, wait briefly, or add backoff/retry scheduling.",
+        cause: "The provider request rate reached the account limit.",
+        suggestion: "Reduce concurrency or retry with backoff.",
         retryable: true,
       };
     case 500:
       return {
         category: "server_error",
         title: "500 - Server error",
-        cause: "DeepSeek reported an internal server error.",
-        suggestion: "Retry later. If it persists, collect request metadata and contact DeepSeek.",
+        cause: "The provider reported an internal server error.",
+        suggestion: "Retry later and preserve request metadata if the error persists.",
         retryable: true,
       };
     case 503:
       return {
         category: "server_busy",
         title: "503 - Server busy",
-        cause: "DeepSeek servers are currently overloaded.",
+        cause: "The provider is currently overloaded.",
         suggestion: "Retry later with backoff.",
         retryable: true,
       };
     default:
       return {
         category: "unknown",
-        title: status ? `${status} - DeepSeek API error` : "DeepSeek API error",
-        cause: "The DeepSeek API request failed.",
-        suggestion: "Inspect the original error message and request context.",
+        title: status ? `${status} - API error` : "API error",
+        cause: "The model API request failed.",
+        suggestion: "Inspect the original error and provider request context.",
         retryable: false,
       };
   }
-}
-
-function formatDeepSeekApiErrorMessage(input: {
-  status?: number;
-  info: DeepSeekApiErrorInfo;
-  originalMessage?: string;
-}): string {
-  return [
-    `DeepSeek API error: ${input.info.title}`,
-    `Cause: ${input.info.cause}`,
-    `Suggestion: ${input.info.suggestion}`,
-    `Retryable: ${input.info.retryable ? "yes" : "no"}`,
-    input.originalMessage ? `Original: ${input.originalMessage}` : undefined,
-  ].filter(Boolean).join("\n");
 }
 
 function readErrorStatus(error: unknown): number | undefined {
   if (!isRecord(error)) {
     return undefined;
   }
-
   const direct = error.status ?? error.statusCode ?? error.code;
   if (typeof direct === "number") {
     return direct;
   }
-
   if (typeof direct === "string" && /^\d+$/.test(direct)) {
     return Number(direct);
   }
-
   return undefined;
 }
 
@@ -175,19 +173,15 @@ function readErrorMessage(error: unknown): string | undefined {
   if (error instanceof Error) {
     return error.message;
   }
-
   if (!isRecord(error)) {
     return undefined;
   }
-
   if (typeof error.message === "string") {
     return error.message;
   }
-
   if (isRecord(error.error) && typeof error.error.message === "string") {
     return error.error.message;
   }
-
   return undefined;
 }
 

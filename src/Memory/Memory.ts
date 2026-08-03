@@ -1,5 +1,7 @@
-import { DeepSeekClient } from "../deepseek/client.js";
-import { createDeepSeekClient } from "../deepseek/client.js";
+import {
+    createOpenAICompatibleClient,
+    type OpenAICompatibleClient,
+} from "../openai-compatible/model-client.js";
 import { OpenAIEmbedder } from "./Embedding/Embedding.js";
 import { MemoryConfig, AddMemoryOptions, SearchResult, SearchFilters, MemoryItem } from "./type.js";
 import { VectorStore } from "./VectorStore/base.js";

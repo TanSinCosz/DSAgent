@@ -1,4 +1,4 @@
-import type { DeepSeekMessage } from "../deepseek/types.js";
+import type { ModelMessage } from "../openai-compatible/types.js";
 import type { SkillCommand } from "../Tools/types.js";
 import { createMessage, type Message, type MessageSource } from "../types/messages.js";
 import type { Runtime } from "../types/runtime.js";
@@ -65,7 +65,7 @@ export function appendRuntimeContextMessages(
  */
 export function createProjectionContextMessage(
   blocks: readonly ProjectionContextBlock[],
-): DeepSeekMessage | null {
+): ModelMessage | null {
   const visibleBlocks = blocks.filter((block) => block.content.trim().length > 0);
   if (visibleBlocks.length === 0) {
     return null;

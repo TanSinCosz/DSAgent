@@ -6,13 +6,13 @@ import { Agent } from "../src/Tools/Agent/Agent.js";
 import { createAgentDefinitions } from "../src/Tools/Agent/index.js";
 import { SendMessage } from "../src/Tools/SendMessage/SendMessage.js";
 import type { Tool, ToolUseContext } from "../src/Tools/types.js";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { createRuntime } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
 
@@ -99,7 +99,7 @@ test("SendMessage pending messages are drained into the running agent context", 
     markWaitToolStarted = resolve;
   });
   const waitTool = new WaitTool(waitToolRelease, markWaitToolStarted);
-  const streamRequests: DeepSeekStreamRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
   const client = createStreamingClient([
     [toolCallChunk("tool_call_1", "WaitForMessage", {})],
     [textChunk("done")],
@@ -107,12 +107,12 @@ test("SendMessage pending messages are drained into the running agent context", 
   const state = createState();
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     agentDefinitions,
     tools: [
@@ -165,12 +165,12 @@ function createHarness() {
   const state = createState();
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createFakeClient(),
+    modelClient: createFakeClient(),
     MemoryConfig: createMemoryConfig(),
     transcriptStore: false,
   });
@@ -222,16 +222,16 @@ class WaitTool implements Tool<Record<string, never>, { ok: true }> {
 }
 
 function createStreamingClient(
-  streams: DeepSeekStreamEnvelope[][],
-  streamRequests: DeepSeekStreamRequest[],
-): DeepSeekClient {
+  streams: ModelStreamEnvelope[][],
+  streamRequests: ModelStreamRequest[],
+): OpenAICompatibleClient {
   let streamIndex = 0;
 
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       streamRequests.push(input);
       const events = streams[streamIndex++] ?? [];
       for (const event of events) {
@@ -249,7 +249,7 @@ function createStreamingClient(
   };
 }
 
-function textChunk(text: string): DeepSeekStreamEnvelope {
+function textChunk(text: string): ModelStreamEnvelope {
   return {
     raw: text,
     done: false,
@@ -276,7 +276,7 @@ function toolCallChunk(
   id: string,
   name: string,
   input: Record<string, unknown>,
-): DeepSeekStreamEnvelope {
+): ModelStreamEnvelope {
   return {
     raw: "tool_call",
     done: false,
@@ -324,12 +324,12 @@ async function waitFor(
   }
 }
 
-function createFakeClient(): DeepSeekClient {
+function createFakeClient(): OpenAICompatibleClient {
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(_input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(_input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       throw new Error("stream is not used in this test");
     },
     async collectStream(): Promise<never> {

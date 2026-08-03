@@ -427,7 +427,7 @@ function resolvePromptOptions(
 ): RequiredPromptOptions {
   return {
     cwd: path.resolve(options.cwd ?? runtime.cwd),
-    model: options.model ?? runtime.deepSeekRuntimeConfig.model ?? "unknown",
+    model: options.model ?? runtime.modelRuntimeConfig.model ?? "unknown",
     language: options.language,
     includeEnvironment: options.includeEnvironment ?? true,
     outputStyle: options.outputStyle,

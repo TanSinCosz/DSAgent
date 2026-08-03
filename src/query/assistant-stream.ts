@@ -1,30 +1,30 @@
-import type { DeepSeekClient } from "../deepseek/client.js";
+import type { OpenAICompatibleClient } from "../openai-compatible/model-client.js";
 import type {
-  DeepSeekAssistantMessage,
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekDeltaToolCall,
-  DeepSeekStreamEnvelope,
-  DeepSeekToolCall,
-} from "../deepseek/types.js";
+  ModelAssistantMessage,
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelDeltaToolCall,
+  ModelStreamEnvelope,
+  ModelToolCall,
+} from "../openai-compatible/types.js";
 
 export type AssistantStreamUpdate =
-  | { type: "model_stream_event"; event: DeepSeekStreamEnvelope }
+  | { type: "model_stream_event"; event: ModelStreamEnvelope }
   | { type: "assistant_reasoning_delta"; text: string }
   | { type: "assistant_text_delta"; text: string }
   | {
     type: "assistant_message_ready";
-    message: DeepSeekAssistantMessage;
+    message: ModelAssistantMessage;
     hadContent: boolean;
-    finishReason: DeepSeekChatCompletionResponse["choices"][number]["finish_reason"];
+    finishReason: ModelChatCompletionResponse["choices"][number]["finish_reason"];
   };
 
 export async function* streamAssistantMessage(
-  client: DeepSeekClient,
-  request: DeepSeekCreateRequest & { stream: true },
+  client: OpenAICompatibleClient,
+  request: ModelCreateRequest & { stream: true },
 ): AsyncGenerator<AssistantStreamUpdate, void, void> {
   const assistantMessage = createEmptyAssistantMessage();
-  let finishReason: DeepSeekChatCompletionResponse["choices"][number]["finish_reason"] =
+  let finishReason: ModelChatCompletionResponse["choices"][number]["finish_reason"] =
     "stop";
 
   for await (const event of client.stream(request)) {
@@ -70,7 +70,7 @@ export async function* streamAssistantMessage(
   };
 }
 
-function createEmptyAssistantMessage(): DeepSeekAssistantMessage {
+function createEmptyAssistantMessage(): ModelAssistantMessage {
   return {
     role: "assistant",
     content: "",
@@ -79,7 +79,7 @@ function createEmptyAssistantMessage(): DeepSeekAssistantMessage {
   };
 }
 
-function normalizeAssistantMessage(message: DeepSeekAssistantMessage): void {
+function normalizeAssistantMessage(message: ModelAssistantMessage): void {
   if (!message.content) {
     message.content = message.tool_calls?.length ? null
       : message.reasoning_content
@@ -96,8 +96,8 @@ function normalizeAssistantMessage(message: DeepSeekAssistantMessage): void {
 }
 
 function mergeToolCallDeltas(
-  target: DeepSeekToolCall[],
-  deltas: DeepSeekDeltaToolCall[],
+  target: ModelToolCall[],
+  deltas: ModelDeltaToolCall[],
 ): void {
   for (const delta of deltas) {
     const index = delta.index ?? 0;

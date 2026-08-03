@@ -38,7 +38,7 @@ test("MCP streamable HTTP server supports bearer auth", async () => {
 
     const state = createState();
     const runtime = createRuntime({
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,

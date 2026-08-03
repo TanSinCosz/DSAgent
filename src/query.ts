@@ -8,12 +8,13 @@ import {
 import { PLAN_TOOL_NAME } from "./Tools/Plan/prompt.js";
 import { drainAgentMessages } from "./Tools/Agent/state.js";
 import type {
-  DeepSeekAssistantMessage,
-  DeepSeekToolCall,
-} from "./deepseek/types.js";
+  ModelAssistantMessage,
+  ModelToolCall,
+} from "./openai-compatible/types.js";
+import { getModelUserContentText } from "./openai-compatible/content.js";
 import {
   createMessage,
-  toDeepSeekMessage,
+  toModelMessage,
   type Message,
   type ToolMessage,
 } from "./types/messages.js";
@@ -547,17 +548,17 @@ type PendingToolApproval = {
 
 type ToolCallExecutionBatch = {
   concurrencySafe: boolean;
-  toolCalls: DeepSeekToolCall[];
+  toolCalls: ModelToolCall[];
 };
 
 type PreparedToolCallExecution = {
-  toolCall: DeepSeekToolCall;
+  toolCall: ModelToolCall;
   startedAt: number;
   permissionApproval: PendingToolApproval | null;
 };
 
 type CompletedToolCallExecution = {
-  toolCall: DeepSeekToolCall;
+  toolCall: ModelToolCall;
   startedAt: number;
   finishedAt: number;
   execution: ToolCallExecutionResult;
@@ -565,7 +566,7 @@ type CompletedToolCallExecution = {
 
 function partitionToolCallsForExecution(
   runtime: Runtime,
-  toolCalls: readonly DeepSeekToolCall[],
+  toolCalls: readonly ModelToolCall[],
 ): ToolCallExecutionBatch[] {
   const batches: ToolCallExecutionBatch[] = [];
 
@@ -589,7 +590,7 @@ function partitionToolCallsForExecution(
 
 function isToolCallConcurrencySafe(
   runtime: Runtime,
-  toolCall: DeepSeekToolCall,
+  toolCall: ModelToolCall,
 ): boolean {
   const tool = runtime.tools.find(
     (candidate) => candidate.name === toolCall.function.name,
@@ -698,7 +699,7 @@ async function* executeToolCallBatch(
     yield {
       type: "tool_result",
       toolCall,
-      message: toDeepSeekMessage(stateToolResultMessage),
+      message: toModelMessage(stateToolResultMessage),
       succeeded: completed.execution.succeeded,
     };
   }
@@ -754,7 +755,7 @@ async function requestToolApprovalIfNeeded(
   runtime: Runtime,
   state: State,
   options: QueryOptions,
-  toolCall: DeepSeekToolCall,
+  toolCall: ModelToolCall,
 ): Promise<PendingToolApproval | null> {
   if (
     !isPlanApprovalToolCall(toolCall, state)
@@ -795,7 +796,7 @@ async function requestToolApprovalIfNeeded(
 }
 
 function isPlanApprovalToolCall(
-  toolCall: DeepSeekToolCall,
+  toolCall: ModelToolCall,
   state: State,
 ): boolean {
   if (state.mode !== "plan" || toolCall.function.name !== PLAN_TOOL_NAME) {
@@ -805,7 +806,7 @@ function isPlanApprovalToolCall(
   return parsePlanToolAction(toolCall) === "request_approval";
 }
 
-function parsePlanToolAction(toolCall: DeepSeekToolCall): string | null {
+function parsePlanToolAction(toolCall: ModelToolCall): string | null {
   try {
     const input = JSON.parse(toolCall.function.arguments || "{}") as {
       action?: unknown;
@@ -816,7 +817,7 @@ function parsePlanToolAction(toolCall: DeepSeekToolCall): string | null {
   }
 }
 
-function getPlanApprovalRequestReason(toolCall: DeepSeekToolCall): string {
+function getPlanApprovalRequestReason(toolCall: ModelToolCall): string {
   const fallback = "The agent has submitted a plan and is requesting approval to proceed.";
 
   try {
@@ -841,7 +842,7 @@ function getPlanApprovalRequestReason(toolCall: DeepSeekToolCall): string {
 async function executeToolAfterPermissionDecision(
   runtime: Runtime,
   state: State,
-  toolCall: DeepSeekToolCall,
+  toolCall: ModelToolCall,
   decision: ToolPermissionDecision | null,
 ): Promise<ToolCallExecutionResult> {
   if (decision?.behavior === "allow") {
@@ -1125,7 +1126,7 @@ async function emitLongTermMemoryExtractionEvent(
   });
 }
 
-function getAssistantTextChars(message: DeepSeekAssistantMessage): number {
+function getAssistantTextChars(message: ModelAssistantMessage): number {
   return typeof message.content === "string" ? message.content.length : 0;
 }
 
@@ -1134,15 +1135,19 @@ function hasTaggedMessage(
   tag: string,
 ): boolean {
   return messagesForQuery.messages.some((message) =>
-    getDeepSeekMessageText(message).includes(tag)
+    getModelMessageText(message).includes(tag)
   );
 }
 
-function getDeepSeekMessageText(
+function getModelMessageText(
   message: MessagesForQuery["messages"][number],
 ): string {
   if (message.role === "assistant") {
     return typeof message.content === "string" ? message.content : "";
+  }
+
+  if (message.role === "user") {
+    return getModelUserContentText(message.content);
   }
 
   return message.content;

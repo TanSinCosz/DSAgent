@@ -1,4 +1,4 @@
-import type { DeepSeekMessage, DeepSeekToolCall } from "../deepseek/types.js";
+import type { ModelMessage, ModelToolCall } from "../openai-compatible/types.js";
 import { maybePersistToolResultContent } from "../tool-results/storage.js";
 import type { PersistedToolResult } from "../types/messages.js";
 import type { Runtime } from "../types/runtime.js";
@@ -7,7 +7,7 @@ import type { Tool, Tools } from "./types.js";
 import { runWithCwdOverride } from "./utils/cwd.js";
 
 export type ToolCallExecutionResult = {
-  message: DeepSeekMessage;
+  message: ModelMessage;
   succeeded: boolean;
   persistedToolResult?: PersistedToolResult;
   permissionDenied?: {
@@ -20,17 +20,17 @@ export type ToolCallExecutionOptions = {
 };
 
 export async function executeToolCall(
-  toolCall: DeepSeekToolCall,
+  toolCall: ModelToolCall,
   tools: Tools,
   runtime: Runtime,
   state: State,
-): Promise<DeepSeekMessage> {
+): Promise<ModelMessage> {
   return (await executeToolCallWithMetadata(toolCall, tools, runtime, state))
     .message;
 }
 
 export async function executeToolCallWithMetadata(
-  toolCall: DeepSeekToolCall,
+  toolCall: ModelToolCall,
   tools: Tools,
   runtime: Runtime,
   state: State,
@@ -113,7 +113,7 @@ export async function executeToolCallWithMetadata(
 }
 
 export function createPermissionDeniedToolCallResult(
-  toolCall: DeepSeekToolCall,
+  toolCall: ModelToolCall,
   reason: string,
 ): ToolCallExecutionResult {
   return {
@@ -260,7 +260,7 @@ function validateToolInput(
 function createToolResultMessage(
   toolCallId: string,
   content: string,
-): DeepSeekMessage {
+): ModelMessage {
   return {
     role: "tool",
     tool_call_id: toolCallId,

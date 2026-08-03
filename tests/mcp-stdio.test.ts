@@ -31,7 +31,7 @@ test("MCP stdio server tools are listed, exposed, and callable", async () => {
 
     const state = createState();
     const runtime = createRuntime({
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,

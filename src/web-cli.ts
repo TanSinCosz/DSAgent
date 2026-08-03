@@ -23,8 +23,8 @@ import type {
   ToolPermissionDecision,
   ToolPermissionRequest,
 } from "./query/types.js";
-import type { DeepSeekAssistantMessage } from "./deepseek/types.js";
-import { formatErrorForUser } from "./deepseek/errors.js";
+import type { ModelAssistantMessage } from "./openai-compatible/types.js";
+import { formatOpenAICompatibleErrorForUser } from "./openai-compatible/errors.js";
 import {
   createSweBenchSessionId,
   getSweWorkspaceStatus,
@@ -149,7 +149,7 @@ async function createWebCliSession(
   const runtime = createRuntime({
     cwd: runtimeCwd,
     sessionId,
-    deepSeekRuntimeConfig: loadConfig(),
+    modelRuntimeConfig: loadConfig(),
     MemoryConfig: createMemoryConfig({ cwd: runtimeCwd }),
     longTermMemoryConfig: {
       autoInject: true,
@@ -624,7 +624,7 @@ const server = createServer(async (request, response) => {
       const sweSessionInfo = await getCurrentSweSessionInfo();
       sendJson(response, {
         sessionId: session.runtime.sessionId,
-        model: session.runtime.deepSeekRuntimeConfig.model,
+        model: session.runtime.modelRuntimeConfig.model,
         messageCount: session.state.Messages.length,
         tools: session.runtime.tools.map((tool) => tool.name),
         usage: session.runtime.usage,
@@ -861,7 +861,7 @@ const port = Number(process.env.OPENCAT_WEB_PORT ?? DEFAULT_PORT);
 server.listen(port, () => {
   console.log(`OpenCat debug web CLI: http://localhost:${port}`);
   console.log(`Session: ${session.runtime.sessionId}`);
-  console.log(`Model: ${session.runtime.deepSeekRuntimeConfig.model}`);
+  console.log(`Model: ${session.runtime.modelRuntimeConfig.model}`);
   console.log(
     session.loadInfo.restored
       ? `Restored transcript: ${session.loadInfo.transcriptPath}`
@@ -1095,13 +1095,17 @@ function normalizeQueryEvent(
     case "model_stream_event":
       return undefined;
     case "model_usage":
+      const promptCacheHitTokens = event.usage.prompt_cache_hit_tokens ??
+        event.usage.prompt_tokens_details?.cached_tokens ??
+        0;
       return {
         type: event.type,
         promptTokens: event.usage.prompt_tokens,
         completionTokens: event.usage.completion_tokens,
         totalTokens: event.usage.total_tokens,
-        promptCacheHitTokens: event.usage.prompt_cache_hit_tokens ?? 0,
-        promptCacheMissTokens: event.usage.prompt_cache_miss_tokens ?? 0,
+        promptCacheHitTokens,
+        promptCacheMissTokens: event.usage.prompt_cache_miss_tokens ??
+          Math.max(0, event.usage.prompt_tokens - promptCacheHitTokens),
         sessionPromptTokens: event.sessionUsage.promptTokens,
         sessionCompletionTokens: event.sessionUsage.completionTokens,
         sessionTotalTokens: event.sessionUsage.totalTokens,
@@ -1161,7 +1165,7 @@ function previewText(value: string, maxChars = 500): string {
 }
 
 function normalizeAssistantMessageForWeb(
-  message: DeepSeekAssistantMessage,
+  message: ModelAssistantMessage,
 ): unknown {
   const reasoningContent = message.reasoning_content ?? "";
 
@@ -1296,7 +1300,7 @@ function sendText(
 }
 
 function stringifyError(error: unknown): string {
-  return formatErrorForUser(error);
+  return formatOpenAICompatibleErrorForUser(error);
 }
 
 function renderHtml(): string {
@@ -3998,12 +4002,24 @@ function renderHtml(): string {
 
       function normalizeUsage(usage) {
         if (!usage) return null;
+        var promptTokens = Number(usage.promptTokens || usage.prompt_tokens || 0);
+        var promptDetails = usage.prompt_tokens_details || {};
+        var cacheHitTokens = Number(
+          usage.promptCacheHitTokens ||
+          usage.prompt_cache_hit_tokens ||
+          promptDetails.cached_tokens ||
+          0
+        );
         return {
-          promptTokens: Number(usage.promptTokens || usage.prompt_tokens || 0),
+          promptTokens: promptTokens,
           completionTokens: Number(usage.completionTokens || usage.completion_tokens || 0),
           totalTokens: Number(usage.totalTokens || usage.total_tokens || 0),
-          promptCacheHitTokens: Number(usage.promptCacheHitTokens || usage.prompt_cache_hit_tokens || 0),
-          promptCacheMissTokens: Number(usage.promptCacheMissTokens || usage.prompt_cache_miss_tokens || 0),
+          promptCacheHitTokens: cacheHitTokens,
+          promptCacheMissTokens: Number(
+            usage.promptCacheMissTokens ||
+            usage.prompt_cache_miss_tokens ||
+            Math.max(0, promptTokens - cacheHitTokens)
+          ),
         };
       }
 

@@ -6,7 +6,7 @@ import { createRuntime } from "../src/types/runtime.js";
 
 test("system prompt documents projected context tags", async () => {
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,

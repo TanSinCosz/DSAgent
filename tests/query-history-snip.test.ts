@@ -29,7 +29,7 @@ test("no-projection benchmark leaves persisted projection state unapplied", asyn
     }],
   });
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
@@ -90,7 +90,7 @@ test("buildMessagesForQuery preserves an assistant/tool pair from an old content
     ],
   });
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
@@ -149,7 +149,7 @@ test("buildMessagesForQuery preserves an assistant/tool pair from an old removed
     ],
   });
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
@@ -216,7 +216,7 @@ test("buildMessagesForQuery does not snip business messages when bulky compact m
       ],
     });
     const runtime = createRuntime({
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,
@@ -296,7 +296,7 @@ test("buildMessagesForQuery does not mark snipped Read cache entries as partial 
     });
     const runtime = createRuntime({
       cwd,
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,
@@ -372,7 +372,7 @@ test("buildMessagesForQuery keeps business messages after repeated bulky compact
       ],
     });
     const runtime = createRuntime({
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,
@@ -475,7 +475,7 @@ test("buildMessagesForQuery records durable snip boundaries for old attachment c
         ],
       });
       const runtime = createRuntime({
-        deepSeekRuntimeConfig: {
+        modelRuntimeConfig: {
           apiKey: "test-key",
           model: "deepseek-v4-flash",
           maxTokens: 1024,
@@ -558,7 +558,7 @@ test("buildMessagesForQuery keeps old user and assistant messages intact", async
       ],
     });
     const runtime = createRuntime({
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,
@@ -641,7 +641,7 @@ test("buildMessagesForQuery skips history snip when bulky compact reaches the ta
       ],
     });
     const runtime = createRuntime({
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,
@@ -713,7 +713,7 @@ test("buildMessagesForQuery keeps bulky compaction when no snip candidate is rem
       ],
     });
     const runtime = createRuntime({
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         model: "deepseek-v4-flash",
         maxTokens: 1024,

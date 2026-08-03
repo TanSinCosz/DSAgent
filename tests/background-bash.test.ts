@@ -169,7 +169,7 @@ function createTestRuntime(
     cwd,
     agentId,
     agentRole: agentId === "main" ? "main" : "subagent",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,

@@ -3,12 +3,12 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { query } from "../src/query.js";
 import { createMessage } from "../src/types/messages.js";
 import { createRuntime } from "../src/types/runtime.js";
@@ -19,9 +19,9 @@ test("query recovers output truncation with ordinary chat messages", async () =>
   process.env.OPENCAT_REASONING_CONTINUATION_ROUNDS = "2";
 
   try {
-    const streamRequests: DeepSeekStreamRequest[] = [];
-    const client: DeepSeekClient = {
-      async create(_input: DeepSeekCreateRequest) {
+    const streamRequests: ModelStreamRequest[] = [];
+    const client: OpenAICompatibleClient = {
+      async create(_input: ModelCreateRequest) {
         throw new Error("create is not used in this test");
       },
       async *stream(input) {
@@ -53,14 +53,14 @@ test("query recovers output truncation with ordinary chat messages", async () =>
     });
     const runtime = createRuntime({
       cwd: await mkdtemp(join(tmpdir(), "opencat-reasoning-continuation-")),
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         baseUrl: "https://openai-compatible.example/v1",
         model: "deepseek-v4-pro",
         maxTokens: 1024,
         reasoningEffort: "max",
       },
-      deepSeekClient: client,
+      modelClient: client,
       MemoryConfig: createMemoryConfig(),
       tools: [],
     });
@@ -121,9 +121,9 @@ test("query preserves visible partial content when recovering output truncation"
   process.env.OPENCAT_REASONING_CONTINUATION_ROUNDS = "1";
 
   try {
-    const streamRequests: DeepSeekStreamRequest[] = [];
-    const client: DeepSeekClient = {
-      async create(_input: DeepSeekCreateRequest) {
+    const streamRequests: ModelStreamRequest[] = [];
+    const client: OpenAICompatibleClient = {
+      async create(_input: ModelCreateRequest) {
         throw new Error("create is not used in this test");
       },
       async *stream(input) {
@@ -155,14 +155,14 @@ test("query preserves visible partial content when recovering output truncation"
     });
     const runtime = createRuntime({
       cwd: await mkdtemp(join(tmpdir(), "opencat-output-recovery-")),
-      deepSeekRuntimeConfig: {
+      modelRuntimeConfig: {
         apiKey: "test-key",
         baseUrl: "https://openai-compatible.example/v1",
         model: "openai-compatible-model",
         maxTokens: 1024,
         reasoningEffort: "max",
       },
-      deepSeekClient: client,
+      modelClient: client,
       MemoryConfig: createMemoryConfig(),
       tools: [],
     });
@@ -190,7 +190,7 @@ test("query preserves visible partial content when recovering output truncation"
   }
 });
 
-function lastUserRequestMessage(request: DeepSeekStreamRequest) {
+function lastUserRequestMessage(request: ModelStreamRequest) {
   const message = request.messages.at(-1);
   assert.ok(message);
   if (message.role !== "user") {
@@ -199,7 +199,7 @@ function lastUserRequestMessage(request: DeepSeekStreamRequest) {
   return message;
 }
 
-function createReasoningLengthChunk(reasoning: string): DeepSeekStreamEnvelope {
+function createReasoningLengthChunk(reasoning: string): ModelStreamEnvelope {
   return {
     raw: reasoning,
     done: false,
@@ -222,7 +222,7 @@ function createReasoningLengthChunk(reasoning: string): DeepSeekStreamEnvelope {
   };
 }
 
-function createContentLengthChunk(content: string): DeepSeekStreamEnvelope {
+function createContentLengthChunk(content: string): ModelStreamEnvelope {
   return {
     raw: content,
     done: false,
@@ -245,7 +245,7 @@ function createContentLengthChunk(content: string): DeepSeekStreamEnvelope {
   };
 }
 
-function createContentChunk(content: string): DeepSeekStreamEnvelope {
+function createContentChunk(content: string): ModelStreamEnvelope {
   return {
     raw: content,
     done: false,

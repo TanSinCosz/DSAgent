@@ -9,29 +9,36 @@ import type {
   ChatCompletionToolChoiceOption,
 } from "openai/resources/chat/completions";
 
-import type { DeepSeekRuntimeSettings } from "../types/config.js";
 import {
-  sendDeepSeekSdkRequest,
-  streamDeepSeekSdkRequest,
-  toDeepSeekRuntimeConfig,
-} from "./runtime.js";
+  sendOpenAICompatibleRequest,
+  streamOpenAICompatibleRequest,
+  toOpenAICompatibleTransportConfig,
+} from "./transport.js";
+import {
+  applyProviderRequestExtensions,
+  assertProviderSupportsMessages,
+  getProviderProfile,
+  toProviderAssistantMessage,
+  type ProviderProfile,
+} from "./provider.js";
+import type { ModelRuntimeSettings } from "../types/config.js";
 import type {
-  DeepSeekAssistantMessage,
-  DeepSeekChatCompletionChunk,
-  DeepSeekChatCompletionResponse,
-  DeepSeekChunkChoice,
-  DeepSeekCreateRequest,
-  DeepSeekDeltaToolCall,
-  DeepSeekMessage,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-  DeepSeekStreamResult,
-  DeepSeekToolCall,
-  DeepSeekToolDefinition,
-  DeepSeekToolChoice,
-  DeepSeekUsage,
-  DeepSeekLogprobs,
-  DeepSeekResponseFormat,
+  ModelAssistantMessage,
+  ModelChatCompletionChunk,
+  ModelChatCompletionResponse,
+  ModelChunkChoice,
+  ModelCreateRequest,
+  ModelDeltaToolCall,
+  ModelMessage,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+  ModelStreamResult,
+  ModelToolCall,
+  ModelToolDefinition,
+  ModelToolChoice,
+  ModelUsage,
+  ModelLogprobs,
+  ModelResponseFormat,
 } from "./types.js";
 
 type StreamResponseSnapshot = {
@@ -40,52 +47,53 @@ type StreamResponseSnapshot = {
   created: number;
   model: string;
   choices: Array<
-    Omit<DeepSeekChatCompletionResponse["choices"][number], "finish_reason"> & {
-      finish_reason: DeepSeekChunkChoice["finish_reason"];
+    Omit<ModelChatCompletionResponse["choices"][number], "finish_reason"> & {
+      finish_reason: ModelChunkChoice["finish_reason"];
     }
   >;
-  usage?: DeepSeekUsage;
+  usage?: ModelUsage;
   system_fingerprint?: string;
 };
 
-export interface CreateDeepSeekClientOptions {
-  config: DeepSeekRuntimeSettings;
+export interface CreateOpenAICompatibleClientOptions {
+  config: ModelRuntimeSettings;
   fetchImpl?: typeof fetch;
 }
 
-export interface DeepSeekClient {
-  create(input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse>;
+export interface OpenAICompatibleClient {
+  create(input: ModelCreateRequest): Promise<ModelChatCompletionResponse>;
   stream(
-    input: DeepSeekStreamRequest
-  ): AsyncGenerator<DeepSeekStreamEnvelope, void, void>;
-  collectStream(input: DeepSeekStreamRequest): Promise<DeepSeekStreamResult>;
+    input: ModelStreamRequest
+  ): AsyncGenerator<ModelStreamEnvelope, void, void>;
+  collectStream(input: ModelStreamRequest): Promise<ModelStreamResult>;
 }
 
-export function createDeepSeekClient(
-  options: CreateDeepSeekClientOptions
-): DeepSeekClient {
-  const runtimeConfig = toDeepSeekRuntimeConfig(
+export function createOpenAICompatibleClient(
+  options: CreateOpenAICompatibleClientOptions
+): OpenAICompatibleClient {
+  const runtimeConfig = toOpenAICompatibleTransportConfig(
     options.config,
     options.fetchImpl
   );
+  const providerProfile = getProviderProfile(options.config);
 
   async function create(
-    input: DeepSeekCreateRequest
-  ): Promise<DeepSeekChatCompletionResponse> {
-    const sdkRequest = toOpenAICreateRequest(input);
-    const sdkResponse = await sendDeepSeekSdkRequest(runtimeConfig, sdkRequest, {
+    input: ModelCreateRequest
+  ): Promise<ModelChatCompletionResponse> {
+    const sdkRequest = toOpenAICreateRequest(input, providerProfile);
+    const sdkResponse = await sendOpenAICompatibleRequest(runtimeConfig, sdkRequest, {
       signal: input.signal,
     });
     return fromOpenAIResponse(sdkResponse);
   }
 
   async function* stream(
-    input: DeepSeekStreamRequest
-  ): AsyncGenerator<DeepSeekStreamEnvelope, void, void> {
-    const sdkRequest = toOpenAIStreamRequest(input);
+    input: ModelStreamRequest
+  ): AsyncGenerator<ModelStreamEnvelope, void, void> {
+    const sdkRequest = toOpenAIStreamRequest(input, providerProfile);
 
     for await (
-      const chunk of streamDeepSeekSdkRequest(runtimeConfig, sdkRequest, {
+      const chunk of streamOpenAICompatibleRequest(runtimeConfig, sdkRequest, {
         signal: input.signal,
       })
     ) {
@@ -104,9 +112,9 @@ export function createDeepSeekClient(
   }
 
   async function collectStream(
-    input: DeepSeekStreamRequest
-  ): Promise<DeepSeekStreamResult> {
-    return collectDeepSeekStream(stream(input));
+    input: ModelStreamRequest
+  ): Promise<ModelStreamResult> {
+    return collectModelStream(stream(input));
   }
 
   return {
@@ -117,11 +125,15 @@ export function createDeepSeekClient(
 }
 
 function toOpenAICreateRequest(
-  input: DeepSeekCreateRequest
+  input: ModelCreateRequest,
+  providerProfile: ProviderProfile,
 ): ChatCompletionCreateParamsNonStreaming {
+  assertProviderSupportsMessages(input.messages, providerProfile);
+
   const request: ChatCompletionCreateParamsNonStreaming & Record<string, unknown> = {
     model: input.model,
-    messages: input.messages.map(toOpenAIMessage),
+    messages: input.messages.map((message) =>
+      toOpenAIMessage(message, providerProfile)),
     max_tokens: input.max_tokens,
     temperature: input.temperature,
     response_format: input.response_format
@@ -137,33 +149,20 @@ function toOpenAICreateRequest(
     presence_penalty: input.presence_penalty ?? undefined,
   };
 
-  // DeepSeek uses the custom `user_id` field for scheduling and KV-cache
-  // isolation. OpenAI's standard `user` field is a different field.
-  if (input.user_id) {
-    request.user_id = input.user_id;
-  }
-
   const toolChoice = toOpenAIToolChoice(input.tool_choice ?? undefined);
   if (toolChoice !== undefined) {
     request.tool_choice = toolChoice;
   }
 
-  if (input.thinking !== undefined) {
-    request.thinking = input.thinking;
-  }
-
-  if (input.reasoning_effort !== undefined) {
-    (request as Record<string, unknown>).reasoning_effort = input.reasoning_effort;
-  }
-
-  return request;
+  return applyProviderRequestExtensions(request, input, providerProfile);
 }
 
 function toOpenAIStreamRequest(
-  input: DeepSeekStreamRequest
+  input: ModelStreamRequest,
+  providerProfile: ProviderProfile,
 ): ChatCompletionCreateParamsStreaming {
   const request: ChatCompletionCreateParamsStreaming & Record<string, unknown> = {
-    ...toOpenAICreateRequest(input),
+    ...toOpenAICreateRequest(input, providerProfile),
     stream: true,
   };
 
@@ -174,7 +173,10 @@ function toOpenAIStreamRequest(
   return request;
 }
 
-function toOpenAIMessage(message: DeepSeekMessage): ChatCompletionMessageParam {
+function toOpenAIMessage(
+  message: ModelMessage,
+  providerProfile: ProviderProfile,
+): ChatCompletionMessageParam {
   switch (message.role) {
     case "system":
       return {
@@ -191,14 +193,7 @@ function toOpenAIMessage(message: DeepSeekMessage): ChatCompletionMessageParam {
       };
 
     case "assistant":
-      return {
-        role: "assistant",
-        content: message.content,
-        name: message.name,
-        tool_calls: message.tool_calls?.map(toOpenAIToolCall),
-        prefix: message.prefix,
-        reasoning_content: message.reasoning_content,
-      } as ChatCompletionMessageParam;
+      return toProviderAssistantMessage(message, providerProfile);
 
     case "tool":
       return {
@@ -209,7 +204,7 @@ function toOpenAIMessage(message: DeepSeekMessage): ChatCompletionMessageParam {
   }
 }
 
-function toOpenAITool(tool: DeepSeekToolDefinition): ChatCompletionTool {
+function toOpenAITool(tool: ModelToolDefinition): ChatCompletionTool {
   return {
     type: "function",
     function: {
@@ -224,7 +219,7 @@ function toOpenAITool(tool: DeepSeekToolDefinition): ChatCompletionTool {
 }
 
 function toOpenAIToolChoice(
-  toolChoice: DeepSeekToolChoice | undefined
+  toolChoice: ModelToolChoice | undefined
 ): ChatCompletionToolChoiceOption | undefined {
   if (!toolChoice) {
     return undefined;
@@ -233,7 +228,7 @@ function toOpenAIToolChoice(
   return toolChoice;
 }
 
-function toOpenAIToolCall(toolCall: DeepSeekToolCall): ChatCompletionMessageToolCall {
+function toOpenAIToolCall(toolCall: ModelToolCall): ChatCompletionMessageToolCall {
   return {
     id: toolCall.id,
     type: "function",
@@ -246,7 +241,7 @@ function toOpenAIToolCall(toolCall: DeepSeekToolCall): ChatCompletionMessageTool
 
 function fromOpenAIResponse(
   response: ChatCompletion
-): DeepSeekChatCompletionResponse {
+): ModelChatCompletionResponse {
   return {
     id: response.id,
     object: "chat.completion",
@@ -265,7 +260,7 @@ function fromOpenAIResponse(
 
 function fromOpenAIChunk(
   chunk: ChatCompletionChunk
-): DeepSeekChatCompletionChunk {
+): ModelChatCompletionChunk {
   return {
     id: chunk.id,
     object: "chat.completion.chunk",
@@ -287,7 +282,7 @@ function fromOpenAIChunk(
   };
 }
 
-function fromOpenAIAssistantMessage(message: ChatCompletion.Choice["message"]): DeepSeekAssistantMessage {
+function fromOpenAIAssistantMessage(message: ChatCompletion.Choice["message"]): ModelAssistantMessage {
   return {
     role: "assistant",
     content: message.content,
@@ -296,7 +291,7 @@ function fromOpenAIAssistantMessage(message: ChatCompletion.Choice["message"]): 
   };
 }
 
-function fromOpenAIToolCall(toolCall: ChatCompletionMessageToolCall): DeepSeekToolCall {
+function fromOpenAIToolCall(toolCall: ChatCompletionMessageToolCall): ModelToolCall {
   if ("function" in toolCall) {
     return {
       id: toolCall.id,
@@ -320,7 +315,7 @@ function fromOpenAIToolCall(toolCall: ChatCompletionMessageToolCall): DeepSeekTo
 
 function fromOpenAIDeltaToolCall(
   toolCall: ChatCompletionChunk.Choice.Delta.ToolCall
-): DeepSeekDeltaToolCall {
+): ModelDeltaToolCall {
   return {
     index: toolCall.index,
     id: toolCall.id,
@@ -337,23 +332,52 @@ function fromOpenAIDeltaToolCall(
 
 function fromOpenAIUsage(
   usage: ChatCompletion["usage"] | ChatCompletionChunk["usage"] | null | undefined
-): DeepSeekUsage | undefined {
+): ModelUsage | undefined {
   if (!usage) {
     return undefined;
   }
+
+  const rawUsage = usage as unknown as Record<string, unknown>;
+  const promptDetails = isRecord(rawUsage.prompt_tokens_details)
+    ? rawUsage.prompt_tokens_details
+    : undefined;
+  const cacheHitTokens = readNonNegativeNumber(
+    rawUsage.prompt_cache_hit_tokens,
+  ) ?? readNonNegativeNumber(promptDetails?.cached_tokens);
+  const cacheMissTokens = readNonNegativeNumber(
+    rawUsage.prompt_cache_miss_tokens,
+  ) ?? (cacheHitTokens === undefined
+    ? undefined
+    : Math.max(0, usage.prompt_tokens - cacheHitTokens));
 
   return {
     ...usage,
     prompt_tokens: usage.prompt_tokens,
     completion_tokens: usage.completion_tokens,
     total_tokens: usage.total_tokens,
+    ...(cacheHitTokens === undefined
+      ? {}
+      : { prompt_cache_hit_tokens: cacheHitTokens }),
+    ...(cacheMissTokens === undefined
+      ? {}
+      : { prompt_cache_miss_tokens: cacheMissTokens }),
   };
 }
 
-async function collectDeepSeekStream(
-  stream: AsyncIterable<DeepSeekStreamEnvelope>
-): Promise<DeepSeekStreamResult> {
-  const events: DeepSeekStreamEnvelope[] = [];
+function readNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function collectModelStream(
+  stream: AsyncIterable<ModelStreamEnvelope>
+): Promise<ModelStreamResult> {
+  const events: ModelStreamEnvelope[] = [];
   let response: StreamResponseSnapshot | null = null;
   const reasoningTexts: string[] = [];
 
@@ -376,7 +400,7 @@ async function collectDeepSeekStream(
 
 function applyChunkToResponse(
   current: StreamResponseSnapshot | null,
-  chunk: DeepSeekChatCompletionChunk
+  chunk: ModelChatCompletionChunk
 ): StreamResponseSnapshot {
   if (!current) {
     return {
@@ -435,7 +459,7 @@ function ensureChoice(
 
 function applyChunkChoice(
   target: StreamResponseSnapshot["choices"][number],
-  chunkChoice: DeepSeekChunkChoice
+  chunkChoice: ModelChunkChoice
 ): void {
   const delta = chunkChoice.delta;
 
@@ -460,7 +484,7 @@ function applyChunkChoice(
 
 function applyChunkReasoning(
   reasoningTexts: string[],
-  chunk: DeepSeekChatCompletionChunk
+  chunk: ModelChatCompletionChunk
 ): void {
   for (const choice of chunk.choices) {
     if (typeof choice.delta.reasoning_content !== "string") {
@@ -477,7 +501,7 @@ function applyChunkReasoning(
 
 function finalizeStreamResponseSnapshot(
   response: StreamResponseSnapshot | null
-): DeepSeekChatCompletionResponse | null {
+): ModelChatCompletionResponse | null {
   if (!response) {
     return null;
   }
@@ -500,8 +524,8 @@ function finalizeStreamResponseSnapshot(
   };
 }
 
-function collectInitialToolCalls(choice: DeepSeekChunkChoice): DeepSeekToolCall[] {
-  const toolCalls: DeepSeekToolCall[] = [];
+function collectInitialToolCalls(choice: ModelChunkChoice): ModelToolCall[] {
+  const toolCalls: ModelToolCall[] = [];
 
   if (choice.delta.tool_calls?.length) {
     mergeToolCalls(toolCalls, choice.delta.tool_calls);
@@ -511,8 +535,8 @@ function collectInitialToolCalls(choice: DeepSeekChunkChoice): DeepSeekToolCall[
 }
 
 function mergeToolCalls(
-  target: DeepSeekToolCall[],
-  deltaToolCalls: NonNullable<DeepSeekChunkChoice["delta"]["tool_calls"]>
+  target: ModelToolCall[],
+  deltaToolCalls: NonNullable<ModelChunkChoice["delta"]["tool_calls"]>
 ): void {
   for (const deltaToolCall of deltaToolCalls) {
     const index = deltaToolCall.index ?? 0;
@@ -559,13 +583,13 @@ function getReasoningContent(
 }
 
 function toOpenAIResponseFormat(
-  responseFormat: DeepSeekResponseFormat
+  responseFormat: ModelResponseFormat
 ): ChatCompletionCreateParamsNonStreaming["response_format"] {
   return responseFormat as ChatCompletionCreateParamsNonStreaming["response_format"];
 }
 
 function toOpenAIJsonSchema(
-  schema: DeepSeekToolDefinition["function"]["parameters"]
+  schema: ModelToolDefinition["function"]["parameters"]
 ): Record<string, unknown> {
   return schema as unknown as Record<string, unknown>;
 }
@@ -582,24 +606,24 @@ function getMessageReasoningContent(
 
 function fromOpenAILogprobs(
   logprobs: ChatCompletion.Choice["logprobs"] | ChatCompletionChunk.Choice["logprobs"] | null | undefined
-): DeepSeekLogprobs | null | undefined {
+): ModelLogprobs | null | undefined {
   if (!logprobs) {
     return logprobs === null ? null : undefined;
   }
 
   const extendedLogprobs = logprobs as typeof logprobs & {
-    reasoning_content?: DeepSeekLogprobs["reasoning_content"];
+    reasoning_content?: ModelLogprobs["reasoning_content"];
   };
 
   return {
-    content: (logprobs.content as DeepSeekLogprobs["content"]) ?? null,
+    content: (logprobs.content as ModelLogprobs["content"]) ?? null,
     reasoning_content: extendedLogprobs.reasoning_content ?? null,
   };
 }
 
 function normalizeFinishReason(
   finishReason: string | null
-): DeepSeekChatCompletionResponse["choices"][number]["finish_reason"] {
+): ModelChatCompletionResponse["choices"][number]["finish_reason"] {
   switch (finishReason) {
     case "stop":
     case "length":
@@ -616,7 +640,7 @@ function normalizeFinishReason(
 
 function normalizeChunkFinishReason(
   finishReason: string | null
-): DeepSeekChunkChoice["finish_reason"] {
+): ModelChunkChoice["finish_reason"] {
   if (finishReason === null) {
     return null;
   }

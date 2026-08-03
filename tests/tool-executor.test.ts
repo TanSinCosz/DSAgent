@@ -20,7 +20,7 @@ test("executeToolCall runs tools with the runtime working directory", async () =
   const runtimeCwd = await mkdtemp(join(tmpdir(), "opencat-tool-cwd-"));
   const runtime = createRuntime({
     cwd: runtimeCwd,
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,
@@ -62,7 +62,7 @@ test("executeToolCall returns a tool result when a tool is unavailable", async (
     agentId: "agent_explore_test",
     agentRole: "subagent",
     agentType: "Explore",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,
@@ -100,7 +100,7 @@ test("executeToolCall returns a permission-denied tool result", async () => {
     agentId: "agent_session_test",
     agentRole: "session",
     agentType: "session_memory",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,
@@ -138,7 +138,7 @@ test("executeToolCall allows tools granted by temporary command rules", async ()
   const state = createState();
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,
@@ -186,7 +186,7 @@ test("executeToolCall cannot bypass a hard fork policy with temporary rules", as
   const state = createState();
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,
@@ -233,7 +233,7 @@ test("executeToolCall uses model-facing formatted tool results", async () => {
   const state = createState();
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,

@@ -18,7 +18,7 @@ import {
   loadUnclaimedAgentTaskContextAfterAutoCompress,
 } from "../query/runtime-context.js";
 import { restorePlan } from "../plan/persistence.js";
-import type { DeepSeekCreateRequest } from "../deepseek/types.js";
+import type { ModelCreateRequest } from "../openai-compatible/types.js";
 import type {
   AutoCompressState,
   AutoCompressSummary,
@@ -26,7 +26,7 @@ import type {
   ToolResultBudgetState,
 } from "../types/context.js";
 import {
-  toDeepSeekMessage,
+  toModelMessage,
   type Message,
   type MessageId,
   type UserMessage,
@@ -401,9 +401,9 @@ async function summarizeLocalCompactMessages(
     messages,
     LOCAL_COMPACT_MAX_TRANSCRIPT_CHARS,
   );
-  const response = await runtime.deepSeekClient.create({
-    model: runtime.deepSeekRuntimeConfig.model as DeepSeekCreateRequest["model"],
-    user_id: runtime.deepSeekRuntimeConfig.userId,
+  const response = await runtime.modelClient.create({
+    model: runtime.modelRuntimeConfig.model as ModelCreateRequest["model"],
+    user_id: runtime.modelRuntimeConfig.userId,
     messages: [
       {
         role: "system",
@@ -414,11 +414,11 @@ async function summarizeLocalCompactMessages(
         content: buildLocalCompactPrompt(transcript),
       },
     ],
-    max_tokens: runtime.deepSeekRuntimeConfig.maxTokens,
+    max_tokens: runtime.modelRuntimeConfig.maxTokens,
     reasoning_effort:
-      runtime.deepSeekRuntimeConfig.reasoningEffort === "high" ||
-      runtime.deepSeekRuntimeConfig.reasoningEffort === "max"
-        ? runtime.deepSeekRuntimeConfig.reasoningEffort
+      runtime.modelRuntimeConfig.reasoningEffort === "high" ||
+      runtime.modelRuntimeConfig.reasoningEffort === "max"
+        ? runtime.modelRuntimeConfig.reasoningEffort
         : undefined,
     temperature: 0,
     tool_choice: "none",
@@ -670,7 +670,7 @@ function addMessageToRecentTailStats(
 
 function estimateMessageTokens(message: Message): number {
   return message.size?.estimatedTokens ??
-    Math.ceil(JSON.stringify(toDeepSeekMessage(message)).length / 4);
+    Math.ceil(JSON.stringify(toModelMessage(message)).length / 4);
 }
 
 function hasUserContent(message: Message): boolean {

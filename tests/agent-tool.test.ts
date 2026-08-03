@@ -17,13 +17,13 @@ import {
   runAgentTask,
   type AgentOutput,
 } from "../src/Tools/Agent/runner.js";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { buildMessagesForQuery } from "../src/query/messages.js";
 import { createStreamRequest } from "../src/query/request.js";
 import { createMessage } from "../src/types/messages.js";
@@ -610,7 +610,7 @@ test("Agent tool worktree isolation keeps file edits out of the parent cwd", asy
     return;
   }
 
-  const streamRequests: DeepSeekStreamRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
   let worktreePath: string | undefined;
   let worktreeBranch: string | undefined;
   const client = createWorktreeClient(streamRequests, (pathFromPrompt) => {
@@ -620,12 +620,12 @@ test("Agent tool worktree isolation keeps file edits out of the parent cwd", asy
   const state = createState();
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     agentDefinitions,
   });
@@ -682,24 +682,24 @@ test("Agent tool worktree isolation keeps file edits out of the parent cwd", asy
 type HarnessOptions = {
   cwd?: string;
   parentMessages?: ReturnType<typeof createMessage>[];
-  streams: DeepSeekStreamEnvelope[][];
+  streams: ModelStreamEnvelope[][];
 };
 
 function createHarness(options: HarnessOptions) {
   const agentDefinitions = createAgentDefinitions();
-  const streamRequests: DeepSeekStreamRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
   const client = createFakeClient(options.streams, streamRequests);
   const state = createState({
     messages: options.parentMessages ?? [],
   });
   const runtime = createRuntime({
     cwd: options.cwd ?? tmpdir(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     agentDefinitions,
   });
@@ -713,22 +713,22 @@ function findAgentTool(runtime: ReturnType<typeof createRuntime>): Agent {
   return tool;
 }
 
-function getRequestToolNames(request: DeepSeekStreamRequest | undefined): string[] {
+function getRequestToolNames(request: ModelStreamRequest | undefined): string[] {
   assert.ok(request);
   return (request.tools ?? []).map((tool) => tool.function.name);
 }
 
 function createFakeClient(
-  streams: DeepSeekStreamEnvelope[][],
-  streamRequests: DeepSeekStreamRequest[],
-): DeepSeekClient {
+  streams: ModelStreamEnvelope[][],
+  streamRequests: ModelStreamRequest[],
+): OpenAICompatibleClient {
   let streamIndex = 0;
 
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       streamRequests.push(input);
       const events = streams[streamIndex++] ?? [];
       for (const event of events) {
@@ -747,16 +747,16 @@ function createFakeClient(
 }
 
 function createWorktreeClient(
-  streamRequests: DeepSeekStreamRequest[],
+  streamRequests: ModelStreamRequest[],
   onWorktreePath: (worktreePath: string) => void,
-): DeepSeekClient {
+): OpenAICompatibleClient {
   let streamIndex = 0;
 
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       streamRequests.push(input);
       if (streamIndex++ === 0) {
         const prompt = input.messages.at(-1)?.content ?? "";
@@ -784,7 +784,7 @@ function createWorktreeClient(
   };
 }
 
-function textChunk(text: string): DeepSeekStreamEnvelope {
+function textChunk(text: string): ModelStreamEnvelope {
   return {
     raw: text,
     done: false,
@@ -811,7 +811,7 @@ function toolCallChunk(
   id: string,
   name: string,
   input: Record<string, unknown>,
-): DeepSeekStreamEnvelope {
+): ModelStreamEnvelope {
   return {
     raw: "tool_call",
     done: false,

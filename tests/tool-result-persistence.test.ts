@@ -5,13 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { z } from "zod";
 
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { query } from "../src/query.js";
 import { createRuntime } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
@@ -19,16 +19,16 @@ import type { Tool } from "../src/Tools/types.js";
 
 test("large tool results stay inline until group budget selects them", async () => {
   const largeOutput = `header\n${"x".repeat(4_096)}\nfooter`;
-  const streamRequests: DeepSeekStreamRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-tool-result-store-")),
     sessionId: "session_tool_result_store_test",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createToolCallClient(streamRequests),
+    modelClient: createToolCallClient(streamRequests),
     MemoryConfig: createMemoryConfig(),
     tools: [createLargeOutputTool(largeOutput)],
   });
@@ -55,16 +55,16 @@ test("large tool results stay inline until group budget selects them", async () 
 
 test("tool results exceeding per-tool max are persisted immediately", async () => {
   const largeOutput = `header\n${"x".repeat(4_096)}\nfooter`;
-  const streamRequests: DeepSeekStreamRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-tool-result-per-tool-store-")),
     sessionId: "session_tool_result_per_tool_store_test",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createToolCallClient(streamRequests),
+    modelClient: createToolCallClient(streamRequests),
     MemoryConfig: createMemoryConfig(),
     tools: [createLargeOutputTool(largeOutput, 1_000)],
   });
@@ -113,15 +113,15 @@ function createLargeOutputTool(
 }
 
 function createToolCallClient(
-  streamRequests: DeepSeekStreamRequest[],
-): DeepSeekClient {
+  streamRequests: ModelStreamRequest[],
+): OpenAICompatibleClient {
   let streamCount = 0;
 
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(input: DeepSeekStreamRequest) {
+    async *stream(input: ModelStreamRequest) {
       streamRequests.push(input);
       streamCount++;
 
@@ -144,7 +144,7 @@ function toolCallChunk(
   id: string,
   name: string,
   input: Record<string, unknown>,
-): DeepSeekStreamEnvelope {
+): ModelStreamEnvelope {
   return {
     raw: "tool_call",
     done: false,
@@ -177,7 +177,7 @@ function toolCallChunk(
   };
 }
 
-function textChunk(text: string): DeepSeekStreamEnvelope {
+function textChunk(text: string): ModelStreamEnvelope {
   return {
     raw: text,
     done: false,
@@ -200,7 +200,7 @@ function textChunk(text: string): DeepSeekStreamEnvelope {
   };
 }
 
-function doneChunk(): DeepSeekStreamEnvelope {
+function doneChunk(): ModelStreamEnvelope {
   return {
     chunk: null,
     raw: "[DONE]",

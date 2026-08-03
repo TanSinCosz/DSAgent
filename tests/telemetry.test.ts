@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekUsage,
-} from "../src/deepseek/types.js";
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelUsage,
+} from "../src/openai-compatible/types.js";
 import { query } from "../src/query.js";
 import { createMessage } from "../src/types/messages.js";
 import { createRuntime } from "../src/types/runtime.js";
@@ -33,12 +33,12 @@ test("query emits minimal telemetry events when an observer is configured", asyn
   });
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-telemetry-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-pro",
       maxTokens: 1024,
     },
-    deepSeekClient: createTextClient("OK"),
+    modelClient: createTextClient("OK"),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: {
       enabled: false,
@@ -83,9 +83,9 @@ test("query emits minimal telemetry events when an observer is configured", asyn
   assert.equal(runtime.usage.promptCacheHitTokens, 70);
 });
 
-function createTextClient(content: string): DeepSeekClient {
+function createTextClient(content: string): OpenAICompatibleClient {
   return {
-    async create(_input: DeepSeekCreateRequest) {
+    async create(_input: ModelCreateRequest) {
       throw new Error("create is not used in this test");
     },
     async *stream() {
@@ -109,7 +109,7 @@ function createTextClient(content: string): DeepSeekClient {
   };
 }
 
-function createUsageChunk(usage: DeepSeekUsage): DeepSeekStreamEnvelope {
+function createUsageChunk(usage: ModelUsage): ModelStreamEnvelope {
   return {
     raw: JSON.stringify({ usage }),
     done: false,
@@ -124,7 +124,7 @@ function createUsageChunk(usage: DeepSeekUsage): DeepSeekStreamEnvelope {
   };
 }
 
-function createContentChunk(content: string): DeepSeekStreamEnvelope {
+function createContentChunk(content: string): ModelStreamEnvelope {
   return {
     raw: content,
     done: false,

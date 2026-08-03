@@ -3,12 +3,12 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import {
   applyAutoCompression,
   applyAutoCompressSummary,
@@ -19,9 +19,9 @@ import { createState } from "../src/types/state.js";
 import { createMessage } from "../src/types/messages.js";
 
 test("query auto-compresses oversized projected context", async () => {
-  const createRequests: DeepSeekCreateRequest[] = [];
-  const streamRequests: DeepSeekStreamRequest[] = [];
-  const client: DeepSeekClient = {
+  const createRequests: ModelCreateRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
+  const client: OpenAICompatibleClient = {
     async create(input) {
       createRequests.push(input);
       throw new Error("create should not be used when session memory is ready");
@@ -48,12 +48,12 @@ test("query auto-compresses oversized projected context", async () => {
   state.sessionMemory.lastSummarizedMessageId = state.Messages[180]!.id;
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-auto-compress-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
   });
   state.historySnips.push({
@@ -158,12 +158,12 @@ test("auto-compress clears bulky compact state but preserves recent group budget
   );
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-auto-compress-projection-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: {
+    modelClient: {
       async create() {
         throw new Error("session memory should already be ready");
       },
@@ -206,8 +206,8 @@ test("auto-compress clears bulky compact state but preserves recent group budget
 test("query compacts visible snip content-only history after session memory covers it", async () => {
   const originalAutoCompressTrigger =
     process.env.OPENCAT_AUTO_COMPRESS_TRIGGER_TOKENS;
-  const streamRequests: DeepSeekStreamRequest[] = [];
-  const client: DeepSeekClient = {
+  const streamRequests: ModelStreamRequest[] = [];
+  const client: OpenAICompatibleClient = {
     async create() {
       throw new Error("session memory should already be ready");
     },
@@ -259,12 +259,12 @@ test("query compacts visible snip content-only history after session memory cove
   });
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-snip-content-compact-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
   });
 
@@ -316,12 +316,12 @@ test("auto-compress skips snip compaction when session memory does not cover it"
   });
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-snip-content-uncovered-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: {
+    modelClient: {
       async create() {
         throw new Error("session memory should already be ready");
       },
@@ -354,9 +354,9 @@ test("auto-compress skips snip compaction when session memory does not cover it"
 
 test("query flushes agent notifications after auto-compression", async () => {
   const notificationText = "<task-notification>agent finished after compact</task-notification>";
-  const createRequests: DeepSeekCreateRequest[] = [];
-  const streamRequests: DeepSeekStreamRequest[] = [];
-  const client: DeepSeekClient = {
+  const createRequests: ModelCreateRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
+  const client: OpenAICompatibleClient = {
     async create(input) {
       createRequests.push(input);
       throw new Error("create should not be used in this test");
@@ -394,12 +394,12 @@ test("query flushes agent notifications after auto-compression", async () => {
   state.sessionMemory.lastSummarizedMessageId = state.Messages[180]!.id;
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-auto-compress-notification-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
   });
 
@@ -418,9 +418,9 @@ test("query flushes agent notifications after auto-compression", async () => {
 });
 
 test("session runtime does not trigger nested auto-compression", async () => {
-  const createRequests: DeepSeekCreateRequest[] = [];
-  const streamRequests: DeepSeekStreamRequest[] = [];
-  const client: DeepSeekClient = {
+  const createRequests: ModelCreateRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
+  const client: OpenAICompatibleClient = {
     async create(input) {
       createRequests.push(input);
       throw new Error("session runtime should not update session memory");
@@ -448,12 +448,12 @@ test("session runtime does not trigger nested auto-compression", async () => {
     agentRole: "session",
     parentAgentId: "main",
     agentType: "session_memory",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
   });
 
@@ -468,8 +468,8 @@ test("session runtime does not trigger nested auto-compression", async () => {
 });
 
 test("subagent local auto-compression can create a compact summary", async () => {
-  const createRequests: DeepSeekCreateRequest[] = [];
-  const client: DeepSeekClient = {
+  const createRequests: ModelCreateRequest[] = [];
+  const client: OpenAICompatibleClient = {
     async create(input) {
       createRequests.push(input);
       return {
@@ -512,12 +512,12 @@ test("subagent local auto-compression can create a compact summary", async () =>
     parentAgentId: "main",
     agentRole: "subagent",
     agentType: "worker",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
   });
 
@@ -577,7 +577,7 @@ function createReadySessionMemory(currentState: string) {
   };
 }
 
-function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
+function createAssistantChunk(text: string): ModelStreamEnvelope {
   return {
     raw: text,
     done: false,

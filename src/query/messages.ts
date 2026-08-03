@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DeepSeekMessage } from "../deepseek/types.js";
+import type { ModelMessage } from "../openai-compatible/types.js";
 import { applyAutoCompressSummary } from "../auto-compress/index.js";
 import {
   buildSystemPrompt,
@@ -14,8 +14,8 @@ import type {
   ToolResultBudgetState,
 } from "../types/context.js";
 import {
-  estimateDeepSeekMessageSize,
-  toDeepSeekMessage,
+  estimateModelMessageSize,
+  toModelMessage,
   type Message,
   type MessageId,
   withMessageSize,
@@ -65,7 +65,7 @@ export async function buildMessagesForQuery(
     systemPrompt,
   );
   let visibleMessages = projection.visibleMessages;
-  let deepSeekMessages = projection.deepSeekMessages;
+  let modelMessages = projection.modelMessages;
   let stats = projection.stats;
   let toolResultBudgetSnapshotBeforeNewBulky:
     | ToolResultBudgetStateSnapshot
@@ -75,7 +75,7 @@ export async function buildMessagesForQuery(
   // threshold. Existing replacements are applied above on every build.
   if (
     isContextProjectionEnabled(runtime) &&
-    isContextOverBulkyCompactThreshold(deepSeekMessages)
+    isContextOverBulkyCompactThreshold(modelMessages)
   ) {
     toolResultBudgetSnapshotBeforeNewBulky = snapshotToolResultBudgetState(
       runtime,
@@ -95,7 +95,7 @@ export async function buildMessagesForQuery(
         stats.bulkyToolCompactCount + compacted.stats.bulkyToolCompactCount,
       toolResultCharsAfterCompact: compacted.stats.toolResultCharsAfterCompact,
     };
-    deepSeekMessages = await createDeepSeekMessages({
+    modelMessages = await createModelMessages({
       runtime,
       systemPrompt,
       messages: visibleMessages,
@@ -111,15 +111,15 @@ export async function buildMessagesForQuery(
     state,
     visibleMessages,
     stats,
-    deepSeekMessages,
+    modelMessages,
   )) {
     for (let attempt = 0; attempt < 8; attempt++) {
-      if (!isContextOverBulkyCompactTarget(deepSeekMessages)) {
+      if (!isContextOverBulkyCompactTarget(modelMessages)) {
         break;
       }
 
       const historySnipBoundary = createHistorySnipBoundary(
-        deepSeekMessages,
+        modelMessages,
         visibleMessages,
       );
       if (!historySnipBoundary) {
@@ -135,13 +135,13 @@ export async function buildMessagesForQuery(
         systemPrompt,
       );
       visibleMessages = projection.visibleMessages;
-      deepSeekMessages = projection.deepSeekMessages;
+      modelMessages = projection.modelMessages;
       stats = projection.stats;
     }
 
     if (
       historySnipCount > 0 &&
-      isContextOverHistorySnipCancelThreshold(deepSeekMessages)
+      isContextOverHistorySnipCancelThreshold(modelMessages)
     ) {
       historySnips.splice(historySnipStartCount);
       if (toolResultBudgetSnapshotBeforeNewBulky) {
@@ -159,14 +159,14 @@ export async function buildMessagesForQuery(
         systemPrompt,
       );
       visibleMessages = projection.visibleMessages;
-      deepSeekMessages = projection.deepSeekMessages;
+      modelMessages = projection.modelMessages;
       stats = projection.stats;
     }
   }
 
   return {
     systemPrompt,
-    messages: deepSeekMessages,
+    messages: modelMessages,
     forkContextMessages: cloneMessages(visibleMessages),
     stats: {
       ...stats,
@@ -188,7 +188,7 @@ export async function buildPreprojectedMessagesForQuery(
 
   return {
     systemPrompt,
-    messages: await createDeepSeekMessages({
+    messages: await createModelMessages({
       runtime,
       systemPrompt,
       messages: visibleMessages,
@@ -230,7 +230,7 @@ async function projectMessagesWithExistingCompressionState(
   systemPrompt: string,
 ): Promise<{
   visibleMessages: Message[];
-  deepSeekMessages: DeepSeekMessage[];
+  modelMessages: ModelMessage[];
   stats: MessageProjectionStats;
 }> {
   const projectedMessages = cloneMessages(applyAutoCompressSummary(state));
@@ -266,7 +266,7 @@ async function projectMessagesWithExistingCompressionState(
   const visibleMessages = projectionEnabled
     ? applyHistorySnipBoundaries(state, compacted.messages)
     : compacted.messages;
-  const deepSeekMessages = await createDeepSeekMessages({
+  const modelMessages = await createModelMessages({
     runtime,
     systemPrompt,
     messages: visibleMessages,
@@ -274,7 +274,7 @@ async function projectMessagesWithExistingCompressionState(
 
   return {
     visibleMessages,
-    deepSeekMessages,
+    modelMessages,
     stats: {
       ...createProjectionStats(),
       toolResultBudgetReplacementCount:
@@ -349,7 +349,7 @@ function estimateSystemPromptTokens(systemPrompt: string): number {
     return 0;
   }
 
-  return estimateDeepSeekMessageSize({
+  return estimateModelMessageSize({
     role: "system",
     content: systemPrompt,
   }).estimatedTokens;
@@ -416,11 +416,11 @@ function selectRecentBulkyToolResultBudgetKeys(
   );
 }
 
-export async function createDeepSeekMessages(options: {
+export async function createModelMessages(options: {
   runtime?: Runtime;
   systemPrompt: string;
   messages: Message[];
-}): Promise<DeepSeekMessage[]> {
+}): Promise<ModelMessage[]> {
   const systemContext = options.runtime
     ? await getOrCreateSystemContext(options.runtime)
     : {};
@@ -437,7 +437,7 @@ export async function createDeepSeekMessages(options: {
       role: "system",
       content: systemPrompt,
     },
-    ...messages.map(toDeepSeekMessage),
+    ...messages.map(toModelMessage),
   ];
 }
 
@@ -507,7 +507,7 @@ export async function getOrCreateSystemPrompt(
   // reuse the exact same system string.
   if (!runtime.systemPrompt) {
     runtime.systemPrompt = await buildSystemPrompt(runtime, {
-      model: runtime.deepSeekRuntimeConfig.model,
+      model: runtime.modelRuntimeConfig.model,
     });
   }
 
@@ -889,7 +889,7 @@ function hasHistorySnipForLatestMessage(
 }
 
 export function createHistorySnipBoundary(
-  messagesForQuery: DeepSeekMessage[],
+  messagesForQuery: ModelMessage[],
   messages: Message[],
 ): HistorySnipBoundary | null {
   const desiredMessagesForQueryTokens = getDesiredHistorySnipTokens();
@@ -926,14 +926,14 @@ function shouldCreateHistorySnipBoundary(
   state: State,
   preparedMessages: readonly Message[],
   stats: MessageProjectionStats,
-  deepSeekMessages: DeepSeekMessage[],
+  modelMessages: ModelMessage[],
 ): boolean {
   if (hasHistorySnipForLatestMessage(state, preparedMessages)) {
     return false;
   }
 
   return stats.bulkyToolCompactNeeded &&
-    totalMessageTokens(deepSeekMessages) >
+    totalMessageTokens(modelMessages) >
     getBulkyToolResultCompactTargetContextTokens();
 }
 
@@ -1392,7 +1392,7 @@ function renderHeadTailToolResultPreview(content: string, maxTokens: number): st
 }
 
 function estimateToolResultReplacementTokens(content: string): number {
-  return estimateDeepSeekMessageSize({
+  return estimateModelMessageSize({
     role: "tool",
     tool_call_id: "compact_preview",
     content,
@@ -1400,21 +1400,21 @@ function estimateToolResultReplacementTokens(content: string): number {
 }
 
 function isContextOverBulkyCompactThreshold(
-  messagesForQuery: DeepSeekMessage[],
+  messagesForQuery: ModelMessage[],
 ): boolean {
   return totalMessageTokens(messagesForQuery) >=
     getBulkyToolResultCompactContextTokens();
 }
 
 function isContextOverBulkyCompactTarget(
-  messagesForQuery: DeepSeekMessage[],
+  messagesForQuery: ModelMessage[],
 ): boolean {
   return totalMessageTokens(messagesForQuery) >
     getBulkyToolResultCompactTargetContextTokens();
 }
 
 function isContextOverHistorySnipCancelThreshold(
-  messagesForQuery: DeepSeekMessage[],
+  messagesForQuery: ModelMessage[],
 ): boolean {
   return totalMessageTokens(messagesForQuery) >
     getHistorySnipCancelContextTokens();
@@ -1503,15 +1503,15 @@ function isToolResultAlreadyCompressed(content: string): boolean {
     content.startsWith(BULKY_TOOL_RESULT_COMPACT_TAG);
 }
 
-function totalMessageTokens(messages: DeepSeekMessage[]): number {
+function totalMessageTokens(messages: ModelMessage[]): number {
   return messages.reduce((sum, message) => sum + messageTokens(message), 0);
 }
 
-function messageTokens(message: DeepSeekMessage): number {
-  return estimateDeepSeekMessageSize(message).estimatedTokens;
+function messageTokens(message: ModelMessage): number {
+  return estimateModelMessageSize(message).estimatedTokens;
 }
 
 function getMessageTokenSize(message: Message): number {
   return message.size?.estimatedTokens ??
-    estimateDeepSeekMessageSize(toDeepSeekMessage(message)).estimatedTokens;
+    estimateModelMessageSize(toModelMessage(message)).estimatedTokens;
 }

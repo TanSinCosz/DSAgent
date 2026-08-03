@@ -895,17 +895,30 @@ function transcriptEntryToConversationMessage(
   }
 
   const message = entry.message;
-  const usage = isRecord(message.usage)
+  const usageRecord = isRecord(message.usage) ? message.usage : undefined;
+  const promptDetails = usageRecord && isRecord(usageRecord.prompt_tokens_details)
+    ? usageRecord.prompt_tokens_details
+    : undefined;
+  const promptTokens = usageRecord
+    ? numberValue(usageRecord.prompt_tokens) ?? 0
+    : 0;
+  const cacheHitTokens = usageRecord
+    ? numberValue(usageRecord.prompt_cache_hit_tokens) ??
+      numberValue(promptDetails?.cached_tokens) ??
+      0
+    : 0;
+  const cacheMissTokens = usageRecord
+    ? numberValue(usageRecord.prompt_cache_miss_tokens) ??
+      Math.max(0, promptTokens - cacheHitTokens)
+    : 0;
+  const usage = usageRecord
     ? {
-      promptTokens: numberValue(message.usage.prompt_tokens) ?? 0,
-      completionTokens: numberValue(message.usage.completion_tokens) ?? 0,
-      totalTokens: numberValue(message.usage.total_tokens) ?? 0,
-      cacheHitTokens: numberValue(message.usage.prompt_cache_hit_tokens) ?? 0,
-      cacheMissTokens: numberValue(message.usage.prompt_cache_miss_tokens) ?? 0,
-      cacheHitRate: computeCacheHitRate(
-        numberValue(message.usage.prompt_cache_hit_tokens) ?? 0,
-        numberValue(message.usage.prompt_cache_miss_tokens) ?? 0,
-      ),
+      promptTokens,
+      completionTokens: numberValue(usageRecord.completion_tokens) ?? 0,
+      totalTokens: numberValue(usageRecord.total_tokens) ?? 0,
+      cacheHitTokens,
+      cacheMissTokens,
+      cacheHitRate: computeCacheHitRate(cacheHitTokens, cacheMissTokens),
     }
     : undefined;
   const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];

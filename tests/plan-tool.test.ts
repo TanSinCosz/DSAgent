@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import {
   executeToolCall,
   executeToolCallWithMetadata,
@@ -124,7 +124,7 @@ test("query can approve a submitted plan and exit plan mode", async () => {
   });
   const runtime = createTestRuntime([new Plan()], {
     cwd,
-    deepSeekClient: client,
+    modelClient: client,
   });
   const events: QueryEvent[] = [];
 
@@ -157,7 +157,7 @@ test("query can deny a submitted plan and stay in plan mode", async () => {
   });
   const runtime = createTestRuntime([new Plan()], {
     cwd,
-    deepSeekClient: client,
+    modelClient: client,
   });
   const events: QueryEvent[] = [];
 
@@ -204,7 +204,7 @@ test("query blocks write-like tools in plan mode without requesting approval", a
   });
   const runtime = createTestRuntime([new FileWrite()], {
     cwd,
-    deepSeekClient: client,
+    modelClient: client,
   });
   const events: QueryEvent[] = [];
 
@@ -227,7 +227,7 @@ function createTestRuntime(
   options: {
     canUseToolCalled?: () => never;
     cwd?: string;
-    deepSeekClient?: DeepSeekClient;
+    modelClient?: OpenAICompatibleClient;
   } = {},
 ) {
   const canUseTool: CanUseToolFn | undefined = options.canUseToolCalled
@@ -240,7 +240,7 @@ function createTestRuntime(
   return createRuntime({
     sessionId: "session_plan_tool",
     cwd: options.cwd ?? process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,
@@ -261,7 +261,7 @@ function createTestRuntime(
     },
     transcriptStore: false,
     tools,
-    deepSeekClient: options.deepSeekClient,
+    modelClient: options.modelClient,
     ...(canUseTool ? { canUseTool } : {}),
   });
 }
@@ -269,14 +269,14 @@ function createTestRuntime(
 function createToolThenFinalClient(options: {
   toolName: string;
   toolArguments: unknown;
-}): DeepSeekClient {
+}): OpenAICompatibleClient {
   let requestCount = 0;
 
   return {
     async create() {
       throw new Error("create should not be used");
     },
-    async *stream(_input: DeepSeekStreamRequest) {
+    async *stream(_input: ModelStreamRequest) {
       requestCount++;
       if (requestCount === 1) {
         yield createToolCallChunk(options.toolName, options.toolArguments);
@@ -298,7 +298,7 @@ function createToolThenFinalClient(options: {
 function createToolCallChunk(
   toolName: string,
   toolArguments: unknown,
-): DeepSeekStreamEnvelope {
+): ModelStreamEnvelope {
   return {
     raw: "tool",
     done: false,
@@ -327,7 +327,7 @@ function createToolCallChunk(
   };
 }
 
-function createAssistantTextChunk(text: string): DeepSeekStreamEnvelope {
+function createAssistantTextChunk(text: string): ModelStreamEnvelope {
   return {
     raw: text,
     done: false,

@@ -5,13 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildMessagesForQuery, loadRuntimeContextForQuery, query } from "../src/query.js";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { createMessage } from "../src/types/messages.js";
 import { createRuntime } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
@@ -20,12 +20,12 @@ test("loadRuntimeContextForQuery moves notifications into runtime context", asyn
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-agent-notifications-")),
     sessionId: "session_agent_notifications",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createNoopClient(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState({
@@ -83,12 +83,12 @@ test("subagent runtime does not flush main agent notifications", async () => {
     agentRole: "subagent",
     parentAgentId: "main",
     agentType: "worker",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createNoopClient(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
 
@@ -107,12 +107,12 @@ test("buildMessagesForQuery does not inject unmaterialized runtime context", asy
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-runtime-context-projection-")),
     sessionId: "session_runtime_context_projection",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createNoopClient(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState({
@@ -165,12 +165,12 @@ test("buildMessagesForQuery prepends project instruction context", async () => {
   const runtime = createRuntime({
     cwd,
     sessionId: "session_project_context",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createNoopClient(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState({
@@ -201,12 +201,12 @@ test("query materializes runtime context into durable messages", async () => {
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-runtime-context-materialized-")),
     sessionId: "session_runtime_context_materialized",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createTextClient("OK"),
+    modelClient: createTextClient("OK"),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: {
       enabled: false,
@@ -251,12 +251,12 @@ test("query materializes runtime context into durable messages", async () => {
   assert.match(contextContent, /<task-notification>persist me<\/task-notification>/);
 });
 
-function createNoopClient(): DeepSeekClient {
+function createNoopClient(): OpenAICompatibleClient {
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(_input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(_input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       throw new Error("stream is not used in this test");
     },
     async collectStream(): Promise<never> {
@@ -265,12 +265,12 @@ function createNoopClient(): DeepSeekClient {
   };
 }
 
-function createTextClient(content: string): DeepSeekClient {
+function createTextClient(content: string): OpenAICompatibleClient {
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(_input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(_input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       yield {
         raw: content,
         done: false,

@@ -3,7 +3,7 @@ import { dirname, join, normalize } from "node:path";
 import { FileStateCache } from "../Tools/types.js";
 import type { CanUseToolFn } from "../Tools/types.js";
 import type { AgentDefinition } from "../Tools/Agent/definitions.js";
-import { toDeepSeekMessage, type Message } from "../types/messages.js";
+import { toModelMessage, type Message } from "../types/messages.js";
 import type { Runtime } from "../types/runtime.js";
 import {
   createSessionMemoryState,
@@ -319,7 +319,7 @@ function getContextTokenCountFromUsage(
 function estimateMessagesForApi(messages: readonly Message[]): number {
   return messages.reduce((sum, message) => {
     return sum + (message.size?.estimatedTokens ??
-      Math.ceil(JSON.stringify(toDeepSeekMessage(message)).length / 4));
+      Math.ceil(JSON.stringify(toModelMessage(message)).length / 4));
   }, 0);
 }
 

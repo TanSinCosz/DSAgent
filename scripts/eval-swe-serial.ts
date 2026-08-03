@@ -78,9 +78,11 @@ type InstanceSummary = {
   error?: string;
 };
 
-const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
-if (!apiKey) {
-  throw new Error("Set DEEPSEEK_API_KEY before running SWE serial eval.");
+const modelRuntimeConfig = loadConfig();
+if (!modelRuntimeConfig.apiKey.trim()) {
+  throw new Error(
+    "Set the selected provider API key before running SWE serial eval.",
+  );
 }
 
 const config = await loadSerialConfig(
@@ -101,9 +103,11 @@ const outputRoot = path.resolve(
   runId,
 );
 const limit = readPositiveIntegerSetting("SWE_SERIAL_LIMIT", config.limit, 100);
-const model = process.env.DEEPSEEK_MODEL?.trim() ||
+const model = process.env.OPENCAT_MODEL?.trim() ||
+  process.env.ARK_MODEL?.trim() ||
+  process.env.DEEPSEEK_MODEL?.trim() ||
   config.model?.trim() ||
-  "deepseek-v4-pro";
+  modelRuntimeConfig.model;
 const allowNetworkClone = readBooleanSetting(
   "SWE_SERIAL_ALLOW_NETWORK_CLONE",
   config.allowNetworkClone,
@@ -235,13 +239,10 @@ async function runInstance(instance: SweBenchInstance): Promise<InstanceSummary>
     const runtime = createRuntime({
       cwd: workspace.path,
       sessionId: `session_swe_serial_${hashShort(`${runId}:${instance.instance_id}`)}`,
-      deepSeekRuntimeConfig: {
-        ...loadConfig(),
-        apiKey,
-        baseUrl: process.env.DEEPSEEK_BASE_URL,
+      modelRuntimeConfig: {
+        ...modelRuntimeConfig,
         userId: createEvalUserId(instance),
         model,
-        reasoningEffort: "max",
       },
       MemoryConfig: createMemoryConfig({ cwd: workspace.path }),
       contextCompressionConfig: config.contextCompression,

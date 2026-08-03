@@ -5,13 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { z } from "zod";
 
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { query } from "../src/query.js";
 import type { Tool } from "../src/Tools/types.js";
 import { createRuntime } from "../src/types/runtime.js";
@@ -22,12 +22,12 @@ test("query runs consecutive concurrency-safe tools in parallel", async () => {
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-tool-concurrency-safe-")),
     sessionId: "session_tool_concurrency_safe",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createToolCallClient([
+    modelClient: createToolCallClient([
       createToolCall(0, "call_safe_a", "SafeA"),
       createToolCall(1, "call_safe_b", "SafeB"),
     ]),
@@ -55,12 +55,12 @@ test("query treats non-concurrency-safe tools as execution barriers", async () =
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-tool-concurrency-barrier-")),
     sessionId: "session_tool_concurrency_barrier",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createToolCallClient([
+    modelClient: createToolCallClient([
       createToolCall(0, "call_safe_a", "SafeA"),
       createToolCall(1, "call_unsafe", "Unsafe"),
       createToolCall(2, "call_safe_b", "SafeB"),
@@ -118,8 +118,8 @@ function createToolCall(
   index: number,
   id: string,
   name: string,
-): DeepSeekStreamEnvelope["chunk"] extends infer _Chunk
-  ? NonNullable<NonNullable<DeepSeekStreamEnvelope["chunk"]>["choices"][number]["delta"]["tool_calls"]>[number]
+): ModelStreamEnvelope["chunk"] extends infer _Chunk
+  ? NonNullable<NonNullable<ModelStreamEnvelope["chunk"]>["choices"][number]["delta"]["tool_calls"]>[number]
   : never {
   return {
     index,
@@ -133,13 +133,13 @@ function createToolCall(
 }
 
 function createToolCallClient(
-  toolCalls: NonNullable<NonNullable<DeepSeekStreamEnvelope["chunk"]>["choices"][number]["delta"]["tool_calls"]>,
-): DeepSeekClient {
+  toolCalls: NonNullable<NonNullable<ModelStreamEnvelope["chunk"]>["choices"][number]["delta"]["tool_calls"]>,
+): OpenAICompatibleClient {
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(_input: DeepSeekStreamRequest) {
+    async *stream(_input: ModelStreamRequest) {
       yield {
         raw: "tool_calls",
         done: false,

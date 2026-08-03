@@ -1,29 +1,29 @@
 import type {
-  DeepSeekCreateRequest,
-  DeepSeekMessage,
-  DeepSeekStreamRequest,
-  DeepSeekToolDefinition,
-} from "../deepseek/types.js";
+  ModelCreateRequest,
+  ModelMessage,
+  ModelStreamRequest,
+  ModelToolDefinition,
+} from "../openai-compatible/types.js";
 import type { Runtime } from "../types/runtime.js";
 import type { JSONSchemaObject, Tool, Tools } from "../Tools/types.js";
 import { z } from "zod";
 
 export async function createStreamRequest(
   runtime: Runtime,
-  messages: DeepSeekMessage[],
-): Promise<DeepSeekStreamRequest> {
+  messages: ModelMessage[],
+): Promise<ModelStreamRequest> {
   return {
-    model: runtime.deepSeekRuntimeConfig.model as DeepSeekCreateRequest["model"],
-    user_id: runtime.deepSeekRuntimeConfig.userId,
+    model: runtime.modelRuntimeConfig.model as ModelCreateRequest["model"],
+    user_id: runtime.modelRuntimeConfig.userId,
     messages,
     signal: runtime.toolUseContext.abortController.signal,
-    max_tokens: runtime.deepSeekRuntimeConfig.maxTokens,
+    max_tokens: runtime.modelRuntimeConfig.maxTokens,
     reasoning_effort:
-      runtime.deepSeekRuntimeConfig.reasoningEffort === "high" ||
-      runtime.deepSeekRuntimeConfig.reasoningEffort === "max"
-        ? runtime.deepSeekRuntimeConfig.reasoningEffort
+      runtime.modelRuntimeConfig.reasoningEffort === "high" ||
+      runtime.modelRuntimeConfig.reasoningEffort === "max"
+        ? runtime.modelRuntimeConfig.reasoningEffort
         : undefined,
-    tools: await toDeepSeekTools(runtime.tools),
+    tools: await toModelTools(runtime.tools),
     tool_choice: runtime.tools.length > 0 ? "auto" : undefined,
     stream: true,
     stream_options: {
@@ -32,9 +32,9 @@ export async function createStreamRequest(
   };
 }
 
-async function toDeepSeekTools(
+async function toModelTools(
   tools: Tools,
-): Promise<DeepSeekToolDefinition[] | undefined> {
+): Promise<ModelToolDefinition[] | undefined> {
   if (tools.length === 0) {
     return undefined;
   }

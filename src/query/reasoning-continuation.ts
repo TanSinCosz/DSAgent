@@ -1,10 +1,10 @@
-import type { DeepSeekClient } from "../deepseek/client.js";
+import type { OpenAICompatibleClient } from "../openai-compatible/model-client.js";
 import type {
-  DeepSeekAssistantMessage,
-  DeepSeekCreateRequest,
-  DeepSeekStreamRequest,
-  DeepSeekUsage,
-} from "../deepseek/types.js";
+  ModelAssistantMessage,
+  ModelCreateRequest,
+  ModelStreamRequest,
+  ModelUsage,
+} from "../openai-compatible/types.js";
 import type { Runtime } from "../types/runtime.js";
 import { emitRunEvent } from "../telemetry/observer.js";
 import { streamAssistantMessage, type AssistantStreamUpdate } from "./assistant-stream.js";
@@ -23,8 +23,8 @@ type ReasoningContinuationOptions = {
 const DEFAULT_REASONING_CONTINUATION_ROUNDS = 2;
 
 export type AssistantWithUsage = {
-  message: DeepSeekAssistantMessage;
-  usage?: DeepSeekUsage;
+  message: ModelAssistantMessage;
+  usage?: ModelUsage;
   contextTokenCount?: number;
 };
 
@@ -40,12 +40,12 @@ export type AssistantWithUsage = {
  */
 export async function* streamAssistantWithReasoningContinuation(
   runtime: Runtime,
-  request: DeepSeekCreateRequest & { stream: true },
+  request: ModelCreateRequest & { stream: true },
 ): AsyncGenerator<QueryEvent, AssistantWithUsage, void> {
   const options = getReasoningContinuationOptions();
   const primaryResult = yield* streamAssistantOnce(
     runtime,
-    runtime.deepSeekClient,
+    runtime.modelClient,
     request,
   );
   let result = primaryResult;
@@ -71,7 +71,7 @@ export async function* streamAssistantWithReasoningContinuation(
 
     result = yield* streamAssistantOnce(
       runtime,
-      runtime.deepSeekClient,
+      runtime.modelClient,
       createOutputRecoveryRequest(
         runtime,
         request,
@@ -115,7 +115,7 @@ export async function* streamAssistantWithReasoningContinuation(
 
   result = yield* streamAssistantOnce(
     runtime,
-    runtime.deepSeekClient,
+    runtime.modelClient,
     createFinalAnswerRecoveryRequest(runtime, request, visibleContentTrail),
   );
   usage = combineUsage(usage, result.usage);
@@ -141,11 +141,11 @@ export async function* streamAssistantWithReasoningContinuation(
 
 async function* streamAssistantOnce(
   runtime: Runtime,
-  client: DeepSeekClient,
-  request: DeepSeekCreateRequest & { stream: true },
-): AsyncGenerator<QueryEvent, AssistantReady & { usage?: DeepSeekUsage }, void> {
+  client: OpenAICompatibleClient,
+  request: ModelCreateRequest & { stream: true },
+): AsyncGenerator<QueryEvent, AssistantReady & { usage?: ModelUsage }, void> {
   let assistantResult: AssistantReady | undefined;
-  let latestUsage: DeepSeekUsage | undefined;
+  let latestUsage: ModelUsage | undefined;
 
   for await (const update of streamAssistantMessage(client, request)) {
     if (update.type === "assistant_message_ready") {
@@ -186,9 +186,9 @@ async function* streamAssistantOnce(
 }
 
 function combineUsage(
-  left: DeepSeekUsage | undefined,
-  right: DeepSeekUsage | undefined,
-): DeepSeekUsage | undefined {
+  left: ModelUsage | undefined,
+  right: ModelUsage | undefined,
+): ModelUsage | undefined {
   if (!left) {
     return right;
   }
@@ -210,7 +210,7 @@ function combineUsage(
   };
 }
 
-function getContextTokenCount(usage: DeepSeekUsage | undefined): number | undefined {
+function getContextTokenCount(usage: ModelUsage | undefined): number | undefined {
   if (!usage) {
     return undefined;
   }
@@ -221,8 +221,8 @@ function getContextTokenCount(usage: DeepSeekUsage | undefined): number | undefi
 }
 
 function getContinuationContextTokenCount(
-  primaryUsage: DeepSeekUsage | undefined,
-  finalMessage: DeepSeekAssistantMessage,
+  primaryUsage: ModelUsage | undefined,
+  finalMessage: ModelAssistantMessage,
 ): number | undefined {
   if (!primaryUsage) {
     return undefined;
@@ -242,10 +242,10 @@ function shouldRecoverMaxOutput(result: AssistantReady): boolean {
 
 function createOutputRecoveryRequest(
   runtime: Runtime,
-  request: DeepSeekCreateRequest & { stream: true },
+  request: ModelCreateRequest & { stream: true },
   visibleContentTrail: string,
   round: number,
-): DeepSeekStreamRequest {
+): ModelStreamRequest {
   return {
     ...request,
     messages: [
@@ -262,16 +262,16 @@ function createOutputRecoveryRequest(
         ].join(" "),
       },
     ],
-    model: runtime.deepSeekRuntimeConfig.model as DeepSeekCreateRequest["model"],
+    model: runtime.modelRuntimeConfig.model as ModelCreateRequest["model"],
     max_tokens: getContinuationMaxTokens(runtime),
   };
 }
 
 function createFinalAnswerRecoveryRequest(
   runtime: Runtime,
-  request: DeepSeekCreateRequest & { stream: true },
+  request: ModelCreateRequest & { stream: true },
   visibleContentTrail: string,
-): DeepSeekStreamRequest {
+): ModelStreamRequest {
   return {
     ...request,
     messages: [
@@ -286,7 +286,7 @@ function createFinalAnswerRecoveryRequest(
         ].join(" "),
       },
     ],
-    model: runtime.deepSeekRuntimeConfig.model as DeepSeekCreateRequest["model"],
+    model: runtime.modelRuntimeConfig.model as ModelCreateRequest["model"],
     max_tokens: getFinalAnswerMaxTokens(runtime),
     reasoning_effort: undefined,
     tools: undefined,
@@ -296,7 +296,7 @@ function createFinalAnswerRecoveryRequest(
 
 function createVisiblePartialAssistantMessages(
   visibleContentTrail: string,
-): DeepSeekStreamRequest["messages"] {
+): ModelStreamRequest["messages"] {
   if (!visibleContentTrail.trim()) {
     return [];
   }
@@ -308,10 +308,10 @@ function createVisiblePartialAssistantMessages(
 }
 
 function mergeTrailsIntoMessage(
-  message: DeepSeekAssistantMessage,
+  message: ModelAssistantMessage,
   visibleContentTrail: string,
   reasoningTrail: string,
-): DeepSeekAssistantMessage {
+): ModelAssistantMessage {
   return {
     ...message,
     content: visibleContentTrail.trim() ? visibleContentTrail : message.content,
@@ -334,7 +334,7 @@ function appendReasoningTrail(
   return `${current}\n\n${next}`;
 }
 
-function getAssistantContent(message: DeepSeekAssistantMessage): string {
+function getAssistantContent(message: ModelAssistantMessage): string {
   if (typeof message.content !== "string") {
     return "";
   }
@@ -372,14 +372,14 @@ function getReasoningContinuationOptions(): ReasoningContinuationOptions {
 function getContinuationMaxTokens(runtime: Runtime): number {
   return readPositiveIntegerEnv(
     "OPENCAT_REASONING_CONTINUATION_MAX_TOKENS",
-    runtime.deepSeekRuntimeConfig.maxTokens,
+    runtime.modelRuntimeConfig.maxTokens,
   );
 }
 
 function getFinalAnswerMaxTokens(runtime: Runtime): number {
   return readPositiveIntegerEnv(
     "OPENCAT_REASONING_FINAL_MAX_TOKENS",
-    runtime.deepSeekRuntimeConfig.maxTokens,
+    runtime.modelRuntimeConfig.maxTokens,
   );
 }
 

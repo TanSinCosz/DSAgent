@@ -1,4 +1,29 @@
-export type { AgentConfig, DeepSeekRuntimeSettings } from "./config.js";
+export type {
+  AgentConfig,
+  ModelRuntimeSettings,
+} from "./config.js";
+export type {
+  ModelProvider,
+  ProviderProfile,
+} from "../openai-compatible/provider.js";
+export {
+  createOpenAICompatibleClient,
+  type OpenAICompatibleClient,
+} from "../openai-compatible/model-client.js";
+export {
+  createImageBase64ContentPart,
+  createImageUrlContentPart,
+  createTextContentPart,
+  getModelUserContentText,
+  type ModelImageMimeType,
+} from "../openai-compatible/content.js";
+export type {
+  ModelImageDetail,
+  ModelImageUrlContentPart,
+  ModelTextContentPart,
+  ModelUserContent,
+  ModelUserContentPart,
+} from "../openai-compatible/types.js";
 export {
   createAgentDefinitions,
   drainAgentMessages,
@@ -34,7 +59,7 @@ export type {
 } from "./context.js";
 export {
   createMessage,
-  toDeepSeekMessage,
+  toModelMessage,
   type AssistantMessage,
   type Message,
   type MessageId,

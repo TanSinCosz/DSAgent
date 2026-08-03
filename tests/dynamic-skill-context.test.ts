@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekChatCompletionResponse,
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelChatCompletionResponse,
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { query } from "../src/query.js";
 import { createMessage } from "../src/types/messages.js";
 import { createRuntime } from "../src/types/runtime.js";
@@ -27,12 +27,12 @@ test("dynamic skills are replaced and rematerialized into opencat context", asyn
   });
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-dynamic-skill-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createTextClient("OK"),
+    modelClient: createTextClient("OK"),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: {
       enabled: false,
@@ -85,12 +85,12 @@ function getDynamicSkillContextMessages(state: ReturnType<typeof createState>): 
     .map((message) => typeof message.content === "string" ? message.content : "");
 }
 
-function createTextClient(content: string): DeepSeekClient {
+function createTextClient(content: string): OpenAICompatibleClient {
   return {
-    async create(_input: DeepSeekCreateRequest): Promise<DeepSeekChatCompletionResponse> {
+    async create(_input: ModelCreateRequest): Promise<ModelChatCompletionResponse> {
       throw new Error("create is not used in this test");
     },
-    async *stream(_input: DeepSeekStreamRequest): AsyncGenerator<DeepSeekStreamEnvelope> {
+    async *stream(_input: ModelStreamRequest): AsyncGenerator<ModelStreamEnvelope> {
       yield {
         raw: content,
         done: false,

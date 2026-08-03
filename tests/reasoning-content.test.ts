@@ -3,13 +3,13 @@ import test from "node:test";
 import { streamAssistantMessage } from "../src/query/assistant-stream.js";
 import { query } from "../src/query.js";
 import { buildMessagesForQuery } from "../src/query/messages.js";
-import { createMessage, toDeepSeekMessage } from "../src/types/messages.js";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import { createMessage, toModelMessage } from "../src/types/messages.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { createMemoryConfig } from "../src/Memory/config.js";
 import { createRuntime } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
@@ -22,7 +22,7 @@ test("assistant reasoning content is preserved in model history", () => {
     reasoning_content: "private chain of thought",
   });
 
-  const projected = toDeepSeekMessage(message);
+  const projected = toModelMessage(message);
 
   assert.equal(projected.role, "assistant");
   assert.equal(projected.content, "final answer");
@@ -44,7 +44,7 @@ test("assistant reasoning content is projected when the assistant turn called to
     ],
   });
 
-  const projected = toDeepSeekMessage(message);
+  const projected = toModelMessage(message);
 
   assert.equal(projected.role, "assistant");
   assert.equal(projected.reasoning_content, "tool-use reasoning");
@@ -63,7 +63,7 @@ test("buildMessagesForQuery keeps visible assistant reasoning content", async ()
     ],
   });
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
@@ -85,12 +85,12 @@ test("buildMessagesForQuery keeps visible assistant reasoning content", async ()
 });
 
 test("query carries assistant reasoning content into the next tool-followup request", async () => {
-  const streamRequests: DeepSeekStreamRequest[] = [];
-  const client: DeepSeekClient = {
-    async create(_input: DeepSeekCreateRequest) {
+  const streamRequests: ModelStreamRequest[] = [];
+  const client: OpenAICompatibleClient = {
+    async create(_input: ModelCreateRequest) {
       throw new Error("create is not used in this test");
     },
-    async *stream(input: DeepSeekStreamRequest) {
+    async *stream(input: ModelStreamRequest) {
       streamRequests.push(input);
       if (streamRequests.length === 1) {
         yield createToolCallReasoningChunk();
@@ -114,12 +114,12 @@ test("query carries assistant reasoning content into the next tool-followup requ
     call: () => "echo-result",
   };
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     transcriptStore: false,
     tools: [echoTool],
@@ -150,7 +150,7 @@ test("message source is local metadata and is not projected into model history",
     content: "runtime context",
   }, { source: "agent_notification" });
 
-  const projected = toDeepSeekMessage(message);
+  const projected = toModelMessage(message);
 
   assert.equal(message.source, "agent_notification");
   assert.equal(projected.role, "user");
@@ -159,11 +159,11 @@ test("message source is local metadata and is not projected into model history",
 });
 
 test("reasoning-only streams produce a visible diagnostic instead of blank content", async () => {
-  const client: DeepSeekClient = {
-    async create(_input: DeepSeekCreateRequest) {
+  const client: OpenAICompatibleClient = {
+    async create(_input: ModelCreateRequest) {
       throw new Error("create is not used in this test");
     },
-    async *stream(_input: DeepSeekStreamRequest) {
+    async *stream(_input: ModelStreamRequest) {
       yield {
         raw: "reasoning",
         done: false,
@@ -222,11 +222,11 @@ test("reasoning-only streams produce a visible diagnostic instead of blank conte
 });
 
 test("reasoning deltas are emitted so frontends can render collapsed thinking", async () => {
-  const client: DeepSeekClient = {
-    async create(_input: DeepSeekCreateRequest) {
+  const client: OpenAICompatibleClient = {
+    async create(_input: ModelCreateRequest) {
       throw new Error("create is not used in this test");
     },
-    async *stream(_input: DeepSeekStreamRequest) {
+    async *stream(_input: ModelStreamRequest) {
       yield {
         raw: "reasoning",
         done: false,
@@ -302,7 +302,7 @@ test("reasoning deltas are emitted so frontends can render collapsed thinking", 
   );
 });
 
-function createToolCallReasoningChunk(): DeepSeekStreamEnvelope {
+function createToolCallReasoningChunk(): ModelStreamEnvelope {
   return {
     raw: "tool-call",
     done: false,
@@ -333,7 +333,7 @@ function createToolCallReasoningChunk(): DeepSeekStreamEnvelope {
   };
 }
 
-function createAssistantContentChunk(content: string): DeepSeekStreamEnvelope {
+function createAssistantContentChunk(content: string): ModelStreamEnvelope {
   return {
     raw: content,
     done: false,

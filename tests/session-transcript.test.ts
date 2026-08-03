@@ -3,12 +3,12 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekCreateRequest,
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelCreateRequest,
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { query } from "../src/query.js";
 import { createRuntimeContextMessage } from "../src/query/runtime-context.js";
 import { applyAutoCompressSummary } from "../src/auto-compress/index.js";
@@ -25,8 +25,8 @@ test("transcript store restores messages and latest state snapshot", async () =>
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-transcript-")),
     sessionId: "session_restore_test",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState({ mode: "plan" });
@@ -54,13 +54,13 @@ test("transcript store restores messages and latest state snapshot", async () =>
 });
 
 test("query appends assistant messages to transcript", async () => {
-  const createRequests: DeepSeekCreateRequest[] = [];
-  const streamRequests: DeepSeekStreamRequest[] = [];
+  const createRequests: ModelCreateRequest[] = [];
+  const streamRequests: ModelStreamRequest[] = [];
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-query-transcript-")),
     sessionId: "session_query_test",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: {
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: {
       async create(input) {
         createRequests.push(input);
         throw new Error("create is not used in this test");
@@ -114,8 +114,8 @@ test("subagent transcript store uses the concrete agent id", async () => {
     agentRole: "subagent",
     parentAgentId: "main",
     agentType: "worker",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const message = createMessage({
@@ -146,8 +146,8 @@ test("session transcript store uses the session-agent role", async () => {
     agentRole: "session",
     parentAgentId: "main",
     agentType: "session_memory",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const message = createMessage({
@@ -177,8 +177,8 @@ test("transcript restore hydrates only post auto-compress messages by default", 
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-compact-transcript-")),
     sessionId: "session_compact_restore_test",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const first = createMessage({ role: "user", content: "old context 1" });
@@ -229,8 +229,8 @@ test("transcript restore keeps pending agent notifications from snapshots", asyn
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-agent-notification-transcript-")),
     sessionId: "session_agent_notification_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState({
@@ -260,8 +260,8 @@ test("transcript snapshots omit volatile runtime context messages", async () => 
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-runtime-context-transcript-")),
     sessionId: "session_runtime_context_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState({
@@ -296,8 +296,8 @@ test("transcript restore strips stale dynamic skill context blocks", async () =>
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-projection-context-transcript-")),
     sessionId: "session_projection_context_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const userMessage = createMessage({
@@ -343,8 +343,8 @@ test("transcript restore keeps history snip boundaries from snapshots", async ()
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-history-snip-transcript-")),
     sessionId: "session_history_snip_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const oldMessage = createMessage({
@@ -384,8 +384,8 @@ test("transcript restore keeps tool result projection replacement state", async 
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-tool-budget-transcript-")),
     sessionId: "session_tool_budget_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState();
@@ -411,8 +411,8 @@ test("transcript restore keeps long-term memory recall state without bodies", as
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-memory-state-transcript-")),
     sessionId: "session_memory_state_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const cursorMessage = createMessage({
@@ -447,8 +447,8 @@ test("transcript merges lean state snapshots without repeating projection state"
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-lean-state-transcript-")),
     sessionId: "session_lean_state_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const state = createState();
@@ -490,8 +490,8 @@ test("transcript restore recovers reasoning-only assistant messages", async () =
   const runtime = createRuntime({
     cwd: await mkdtemp(join(tmpdir(), "opencat-reasoning-only-transcript-")),
     sessionId: "session_reasoning_only_restore",
-    deepSeekRuntimeConfig: createRuntimeConfig(),
-    deepSeekClient: createNoopClient(),
+    modelRuntimeConfig: createRuntimeConfig(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
   });
   const message = createMessage({
@@ -520,7 +520,7 @@ test("transcript restore recovers reasoning-only assistant messages", async () =
   );
 });
 
-function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
+function createAssistantChunk(text: string): ModelStreamEnvelope {
   return {
     raw: text,
     done: false,
@@ -543,7 +543,7 @@ function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
   };
 }
 
-function createNoopClient(): DeepSeekClient {
+function createNoopClient(): OpenAICompatibleClient {
   return {
     async create() {
       throw new Error("create is not used in this test");

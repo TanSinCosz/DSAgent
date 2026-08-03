@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type {
-  DeepSeekAssistantMessage,
-  DeepSeekMessage,
-  DeepSeekSystemMessage,
-  DeepSeekToolMessage,
-  DeepSeekUserMessage,
-  DeepSeekUsage,
-} from "../deepseek/types.js";
+  ModelAssistantMessage,
+  ModelMessage,
+  ModelSystemMessage,
+  ModelToolMessage,
+  ModelUserMessage,
+  ModelUsage,
+} from "../openai-compatible/types.js";
 import { estimateTokensFromText } from "../utils/size-estimate.js";
 
 export type MessageId = `msg_${string}`;
@@ -51,7 +51,7 @@ type MessageMeta = {
   createdAt: number;
   source: MessageSource;
   size: MessageSize;
-  usage?: DeepSeekUsage;
+  usage?: ModelUsage;
   /**
    * Context window size immediately after this assistant message completed.
    * This differs from usage when a reasoning continuation made multiple API
@@ -69,10 +69,10 @@ export type PersistedToolResult = {
   originalContentType: "text";
 };
 
-export type SystemMessage = DeepSeekSystemMessage & MessageMeta;
-export type UserMessage = DeepSeekUserMessage & MessageMeta;
-export type AssistantMessage = DeepSeekAssistantMessage & MessageMeta;
-export type ToolMessage = DeepSeekToolMessage & MessageMeta & {
+export type SystemMessage = ModelSystemMessage & MessageMeta;
+export type UserMessage = ModelUserMessage & MessageMeta;
+export type AssistantMessage = ModelAssistantMessage & MessageMeta;
+export type ToolMessage = ModelToolMessage & MessageMeta & {
   toolName?: string;
   toolResultId?: ToolResultId;
   persistedToolResult?: PersistedToolResult;
@@ -85,10 +85,10 @@ export type Message =
   | ToolMessage;
 
 export function createMessage(
-  message: DeepSeekMessage,
+  message: ModelMessage,
   options: {
     source?: MessageSource;
-    usage?: DeepSeekUsage;
+    usage?: ModelUsage;
     contextTokenCount?: number;
   } = {},
 ): Message {
@@ -97,7 +97,7 @@ export function createMessage(
     id: createMessageId(),
     createdAt: Date.now(),
     source: options.source ?? getDefaultMessageSource(message),
-    size: estimateDeepSeekMessageSize(message),
+    size: estimateModelMessageSize(message),
     ...(options.usage ? { usage: options.usage } : {}),
     ...(options.contextTokenCount !== undefined
       ? { contextTokenCount: options.contextTokenCount }
@@ -105,7 +105,7 @@ export function createMessage(
   } as Message;
 }
 
-export function toDeepSeekMessage(message: Message): DeepSeekMessage {
+export function toModelMessage(message: Message): ModelMessage {
   switch (message.role) {
     case "system": {
       const {
@@ -115,9 +115,9 @@ export function toDeepSeekMessage(message: Message): DeepSeekMessage {
         size: _size,
         usage: _usage,
         contextTokenCount: _contextTokenCount,
-        ...deepSeekMessage
+        ...modelMessage
       } = message;
-      return deepSeekMessage;
+      return modelMessage;
     }
     case "user": {
       const {
@@ -127,9 +127,9 @@ export function toDeepSeekMessage(message: Message): DeepSeekMessage {
         size: _size,
         usage: _usage,
         contextTokenCount: _contextTokenCount,
-        ...deepSeekMessage
+        ...modelMessage
       } = message;
-      return deepSeekMessage;
+      return modelMessage;
     }
     case "assistant": {
       const {
@@ -154,23 +154,23 @@ export function toDeepSeekMessage(message: Message): DeepSeekMessage {
         toolName: _toolName,
         toolResultId: _toolResultId,
         persistedToolResult: _persistedToolResult,
-        ...deepSeekMessage
+        ...modelMessage
       } = message;
-      return deepSeekMessage;
+      return modelMessage;
     }
   }
 }
 
-export function withMessageSize<T extends DeepSeekMessage & Partial<MessageMeta>>(
+export function withMessageSize<T extends ModelMessage & Partial<MessageMeta>>(
   message: T,
 ): T & { size: MessageSize } {
   return {
     ...message,
-    size: estimateDeepSeekMessageSize(toDeepSeekMessage(message as Message)),
+    size: estimateModelMessageSize(toModelMessage(message as Message)),
   };
 }
 
-export function estimateDeepSeekMessageSize(message: DeepSeekMessage): MessageSize {
+export function estimateModelMessageSize(message: ModelMessage): MessageSize {
   const serialized = JSON.stringify(message);
 
   return {
@@ -184,7 +184,7 @@ function createMessageId(): MessageId {
   return `msg_${randomUUID()}`;
 }
 
-function getDefaultMessageSource(message: DeepSeekMessage): MessageSource {
+function getDefaultMessageSource(message: ModelMessage): MessageSource {
   switch (message.role) {
     case "system":
       return "system";

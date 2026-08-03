@@ -454,16 +454,16 @@ function createChildAgentRuntime(
     parentAgentId: parent.agentId,
     agentType: options.agentDefinition.agentType,
     cwd: worktree?.worktreePath ?? parent.cwd,
-    deepSeekRuntimeConfig: {
-      ...parent.deepSeekRuntimeConfig,
+    modelRuntimeConfig: {
+      ...parent.modelRuntimeConfig,
       model: options.mode === "fork"
-        ? parent.deepSeekRuntimeConfig.model
+        ? parent.modelRuntimeConfig.model
         : resolveAgentModel(
           options.agentDefinition.model,
-          parent.deepSeekRuntimeConfig.model,
+          parent.modelRuntimeConfig.model,
         ),
     },
-    deepSeekClient: parent.deepSeekClient,
+    modelClient: parent.modelClient,
     contextProjectionState: parent.contextProjectionState,
     toolResultBudgetState: parent.toolResultBudgetState,
     contextCompressionConfig: parent.contextCompressionConfig,
@@ -479,7 +479,7 @@ function createChildAgentRuntime(
     usage: parent.usage,
     tokenizer: parent.toolUseContext.tokenizer,
     isNonInteractiveSession: parent.toolUseContext.options.isNonInteractiveSession,
-    mainLoopModel: parent.deepSeekRuntimeConfig.model,
+    mainLoopModel: parent.modelRuntimeConfig.model,
     agentDefinitions: parent.toolUseContext.options.agentDefinitions,
     thinkingConfig: parent.toolUseContext.options.thinkingConfig,
     appState: deriveChildAppState(options),

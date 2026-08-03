@@ -1,8 +1,8 @@
-import { createDeepSeekClient } from "../src/deepseek/client.js";
+import { createOpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekStreamRequest,
-  DeepSeekUsage,
-} from "../src/deepseek/types.js";
+  ModelStreamRequest,
+  ModelUsage,
+} from "../src/openai-compatible/types.js";
 import { buildMessagesForQuery } from "../src/query/messages.js";
 import { createStreamRequest } from "../src/query/request.js";
 import { createDefaultTools } from "../src/Tools/index.js";
@@ -23,7 +23,7 @@ const pauseMs = Number(process.env.OPENCAT_AGENT_CACHE_PAUSE_MS ?? 1200);
 const runId = process.env.OPENCAT_AGENT_CACHE_RUN_ID ??
   `agent_cache_${Date.now().toString(36)}`;
 
-const client = createDeepSeekClient({
+const client = createOpenAICompatibleClient({
   config: {
     apiKey: deepSeekApiKey,
     baseUrl: process.env.DEEPSEEK_BASE_URL,
@@ -101,7 +101,7 @@ async function createMeasuredRequest(options: {
   parentAgentId?: RuntimeAgentId;
   messages: Message[];
   systemPrompt?: string;
-}): Promise<{ request: DeepSeekStreamRequest; systemPrompt: string }> {
+}): Promise<{ request: ModelStreamRequest; systemPrompt: string }> {
   const state = createState({
     messages: options.messages,
   });
@@ -112,14 +112,14 @@ async function createMeasuredRequest(options: {
     agentRole: options.agentRole,
     parentAgentId: options.parentAgentId,
     agentType: options.agentRole === "main" ? undefined : "worker",
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: deepSeekApiKey,
       baseUrl: process.env.DEEPSEEK_BASE_URL,
       model,
       maxTokens,
       reasoningEffort: "max",
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     tools,
     systemPrompt: options.systemPrompt,
@@ -142,7 +142,7 @@ async function createMeasuredRequest(options: {
   };
 }
 
-async function call(name: string, request: DeepSeekStreamRequest) {
+async function call(name: string, request: ModelStreamRequest) {
   const result = await client.collectStream(request);
   const usage = result.response?.usage;
   const promptTokens = usage?.prompt_tokens ?? 0;
@@ -215,7 +215,7 @@ Directive: CACHE_FORK:${marker}: reply with exactly OK. Do not call tools.
 </fork_worker>`;
 }
 
-function comparableRequest(request: DeepSeekStreamRequest): string {
+function comparableRequest(request: ModelStreamRequest): string {
   return JSON.stringify({
     model: request.model,
     reasoning_effort: request.reasoning_effort,
@@ -301,7 +301,7 @@ function repeatSentence(sentence: string, count: number): string {
 }
 
 function getUsageNumber(
-  usage: DeepSeekUsage | undefined,
+  usage: ModelUsage | undefined,
   key: "prompt_cache_hit_tokens" | "prompt_cache_miss_tokens",
 ): number {
   const value = usage?.[key];

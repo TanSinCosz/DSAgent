@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { DeepSeekClient } from "../src/deepseek/client.js";
+import type { OpenAICompatibleClient } from "../src/openai-compatible/model-client.js";
 import type {
-  DeepSeekStreamEnvelope,
-  DeepSeekStreamRequest,
-} from "../src/deepseek/types.js";
+  ModelStreamEnvelope,
+  ModelStreamRequest,
+} from "../src/openai-compatible/types.js";
 import { TodoWrite } from "../src/Tools/TodoWrite/TodoWrite.js";
 import { query } from "../src/query.js";
 import { createProjectionContextStateMessage } from "../src/query/runtime-context.js";
@@ -22,12 +22,12 @@ test("TodoWrite stores the current agent todo list", async () => {
     sessionId: "session_todo_write",
     agentId: "main",
     cwd: await mkdtemp(join(tmpdir(), "opencat-todo-write-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createNoopClient(),
+    modelClient: createNoopClient(),
     MemoryConfig: createMemoryConfig(),
     transcriptStore: false,
   });
@@ -55,8 +55,8 @@ test("TodoWrite stores the current agent todo list", async () => {
 });
 
 test("query projects todo list context and replaces stale todo blocks", async () => {
-  const streamRequests: DeepSeekStreamRequest[] = [];
-  const client: DeepSeekClient = {
+  const streamRequests: ModelStreamRequest[] = [];
+  const client: OpenAICompatibleClient = {
     async create() {
       throw new Error("create should not be used");
     },
@@ -100,12 +100,12 @@ test("query projects todo list context and replaces stale todo blocks", async ()
     sessionId: "session_todo_projection",
     agentId: "main",
     cwd: await mkdtemp(join(tmpdir(), "opencat-todo-projection-")),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: client,
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     transcriptStore: false,
   });
@@ -123,7 +123,7 @@ test("query projects todo list context and replaces stale todo blocks", async ()
   assert.doesNotMatch(requestText, /OLD_STALE_TODO/);
 });
 
-function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
+function createAssistantChunk(text: string): ModelStreamEnvelope {
   return {
     raw: text,
     done: false,
@@ -146,7 +146,7 @@ function createAssistantChunk(text: string): DeepSeekStreamEnvelope {
   };
 }
 
-function createNoopClient(): DeepSeekClient {
+function createNoopClient(): OpenAICompatibleClient {
   return {
     async create() {
       throw new Error("create should not be used");

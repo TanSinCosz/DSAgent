@@ -16,12 +16,12 @@ test("post auto-compress restore clears and reattaches read file state", async (
   const state = createState();
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 1024,
     },
-    deepSeekClient: createUnusedClient(),
+    modelClient: createUnusedClient(),
     MemoryConfig: createMemoryConfig(),
   });
 

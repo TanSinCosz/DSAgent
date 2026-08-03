@@ -12,7 +12,10 @@ import {
 } from "../transcript/persistence.js";
 import { createAgentDefinitions } from "../Tools/Agent/index.js";
 import { createDefaultTools } from "../Tools/index.js";
-import { createDeepSeekClient, type DeepSeekClient } from "../deepseek/client.js";
+import {
+  createOpenAICompatibleClient,
+  type OpenAICompatibleClient,
+} from "../openai-compatible/model-client.js";
 import {
   createToolUseContext,
   type AgentDefinitionsResult,
@@ -26,8 +29,8 @@ import {
 import type { Tokenizer } from "../Tools/utils/Tokenizer.js";
 import { createSessionId } from "../utils/session.js";
 import {
-  forceDeepSeekRuntimeSettings,
-  type DeepSeekRuntimeSettings,
+  normalizeModelRuntimeSettings,
+  type ModelRuntimeSettings,
 } from "./config.js";
 import type { ContextProjectionState, ToolResultBudgetState } from "./context.js";
 import type { RunObserver } from "../telemetry/observer.js";
@@ -63,8 +66,8 @@ export interface Runtime {
 
   // Runtime capabilities and configuration.
   cwd: string;
-  deepSeekRuntimeConfig: DeepSeekRuntimeSettings;
-  deepSeekClient: DeepSeekClient;
+  modelRuntimeConfig: ModelRuntimeSettings;
+  modelClient: OpenAICompatibleClient;
   systemPrompt?: string;
   systemContext?: Record<string, string>;
   userContext?: Record<string, string>;
@@ -101,8 +104,8 @@ export interface CreateRuntimeOptions {
   parentAgentId?: Runtime["parentAgentId"];
   agentType?: Runtime["agentType"];
   cwd?: string;
-  deepSeekRuntimeConfig: DeepSeekRuntimeSettings;
-  deepSeekClient?: DeepSeekClient;
+  modelRuntimeConfig?: ModelRuntimeSettings;
+  modelClient?: OpenAICompatibleClient;
   systemPrompt?: string;
   systemContext?: Record<string, string>;
   userContext?: Record<string, string>;
@@ -138,9 +141,14 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
   const agentDefinitions = options.agentDefinitions ?? createAgentDefinitions();
   const tools = options.tools ?? createDefaultTools({ agentDefinitions });
   const cwd = options.cwd ?? process.cwd();
-  const deepSeekRuntimeConfig = forceDeepSeekRuntimeSettings(
-    options.deepSeekRuntimeConfig,
-  );
+  const requestedModelConfig = options.modelRuntimeConfig;
+  if (!requestedModelConfig) {
+    throw new Error("createRuntime requires modelRuntimeConfig");
+  }
+  const modelRuntimeConfig = normalizeModelRuntimeSettings(requestedModelConfig);
+  const modelClient = options.modelClient ?? createOpenAICompatibleClient({
+      config: modelRuntimeConfig,
+    });
   const transcriptStore = options.transcriptStore === false
     ? undefined
     : options.transcriptStore ??
@@ -153,19 +161,15 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
         agentType: options.agentType,
       });
 
-  return {
+  const runtime: Runtime = {
     sessionId,
     agentId,
     agentRole,
     parentAgentId: options.parentAgentId,
     agentType: options.agentType,
     cwd,
-    deepSeekRuntimeConfig,
-    deepSeekClient:
-      options.deepSeekClient ??
-      createDeepSeekClient({
-        config: deepSeekRuntimeConfig,
-    }),
+    modelRuntimeConfig,
+    modelClient,
     systemPrompt: options.systemPrompt,
     systemContext: options.systemContext,
     userContext: options.userContext,
@@ -198,6 +202,8 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
       canUseTool: options.canUseTool,
     }),
   };
+
+  return runtime;
 }
 
 export function createRuntimeUsageStats(): RuntimeUsageStats {

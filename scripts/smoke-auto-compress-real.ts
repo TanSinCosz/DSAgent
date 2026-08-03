@@ -41,7 +41,7 @@ const state = createState({
 
 const runtime = createRuntime({
   cwd: await mkdtemp(join(tmpdir(), "opencat-real-auto-compress-")),
-  deepSeekRuntimeConfig: {
+  modelRuntimeConfig: {
     apiKey,
     baseUrl: process.env.DEEPSEEK_BASE_URL,
     model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",

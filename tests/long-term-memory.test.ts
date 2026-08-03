@@ -40,7 +40,7 @@ test("MemorySave stages an append-only daily-log signal", async () => {
   const runtime = createRuntime({
     cwd,
     sessionId: "session_memory_save_metadata",
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd),
   });
@@ -91,8 +91,8 @@ test("long-term memory context can be materialized before request build", async 
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createMemorySelectorClient([
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createMemorySelectorClient([
       "user-prefers-repo-grounded-implementation-notes",
     ]),
     MemoryConfig: createMemoryConfig(),
@@ -133,8 +133,8 @@ test("recalled topic files use bounded content and stale-memory warnings", async
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createMemorySelectorClient(["large-durable-memory"]),
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createMemorySelectorClient(["large-durable-memory"]),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoInject: true,
@@ -176,8 +176,8 @@ test("long-term memory recall stops at the 60 KiB session budget", async () => {
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createMemorySelectorClient(["durable-preference"]),
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createMemorySelectorClient(["durable-preference"]),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoInject: true,
@@ -234,8 +234,8 @@ test("long-term memory recall query ignores synthetic projection messages", asyn
   let selectorInput = "";
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createMemorySelectorClient([], (input) => {
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createMemorySelectorClient([], (input) => {
       selectorInput = input;
     }),
     MemoryConfig: createMemoryConfig(),
@@ -260,7 +260,7 @@ test("MEMORY.md loading follows the 200-line and 25K entrypoint caps", async () 
   const cwd = await mkdtemp(join(tmpdir(), "opencat-file-memory-cap-"));
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd),
   });
@@ -304,13 +304,13 @@ test("default memory scope is shared by worktrees of the same git repository", a
 
   const rootRuntime = createRuntime({
     cwd: repo,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: { userId: "user-1" },
   });
   const nestedRuntime = createRuntime({
     cwd: worktree,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: { userId: "user-1" },
   });
@@ -342,7 +342,7 @@ test("daily memory logs use the official year/month/date layout", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "opencat-file-memory-daily-path-"));
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd),
   });
@@ -370,8 +370,8 @@ test("long-term memory recall persists already-surfaced file versions", async ()
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createMemorySelectorClient([
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createMemorySelectorClient([
       "user-prefers-repo-grounded-implementation-notes",
     ]),
     MemoryConfig: createMemoryConfig(),
@@ -424,7 +424,7 @@ test("file memory scan excludes daily logs from ordinary recall", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "opencat-file-memory-logs-"));
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd),
   });
@@ -452,7 +452,7 @@ test("manual memory dream skips when another dream lock exists", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "opencat-memory-dream-lock-"));
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd),
   });
@@ -470,7 +470,7 @@ test("manual memory dream lists recent session transcripts for cross-session con
   const cwd = await mkdtemp(join(tmpdir(), "opencat-memory-dream-sessions-"));
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd),
   });
@@ -507,7 +507,7 @@ test("file memory defaults to a user-level project directory", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "opencat-file-memory-default-"));
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: {
       userId: "user-1",
@@ -536,8 +536,8 @@ test("completed query long-term memory extraction is deferred for file memory", 
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createBackgroundMemoryClient(),
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createBackgroundMemoryClient(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoExtract: true,
@@ -573,14 +573,14 @@ test("background extraction writes a staged daily log instead of formal memory",
   const runtime = createRuntime({
     cwd,
     sessionId,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
+    modelRuntimeConfig: createDeepSeekConfig(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoExtract: true,
     }),
   });
   dailyLogPath = getFileMemoryDailyLogPath(runtime);
-  runtime.deepSeekClient = createDailyLogWritingMemoryClient(
+  runtime.modelClient = createDailyLogWritingMemoryClient(
     () => dailyLogPath,
     sessionId,
   );
@@ -603,8 +603,8 @@ test("completed query long-term memory extraction does not hydrate transcript in
   const runtime = createRuntime({
     cwd,
     sessionId: "long_memory_transcript_fallback",
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createBackgroundMemoryClient(),
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createBackgroundMemoryClient(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoExtract: true,
@@ -662,8 +662,8 @@ test("completed query long-term memory extraction skips when main agent saved me
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: createBackgroundMemoryClient(),
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: createBackgroundMemoryClient(),
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoExtract: true,
@@ -694,8 +694,8 @@ test("background memory extraction serializes overlapping completed turns", asyn
   const state = createState({ messages: [firstUser, firstAssistant] });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: client,
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoExtract: true,
@@ -740,8 +740,8 @@ test("background extraction survives a cursor removed by auto-compression", asyn
   });
   const runtime = createRuntime({
     cwd,
-    deepSeekRuntimeConfig: createDeepSeekConfig(),
-    deepSeekClient: client,
+    modelRuntimeConfig: createDeepSeekConfig(),
+    modelClient: client,
     MemoryConfig: createMemoryConfig(),
     longTermMemoryConfig: createLongTermMemoryConfig(cwd, {
       autoExtract: true,

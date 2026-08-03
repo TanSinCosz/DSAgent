@@ -98,11 +98,12 @@ type InstanceSummary = {
   error?: string;
 };
 
-const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
-if (!apiKey) {
-  throw new Error("Set DEEPSEEK_API_KEY before running SWE-bench eval.");
+const modelRuntimeConfig = loadConfig();
+if (!modelRuntimeConfig.apiKey.trim()) {
+  throw new Error(
+    "Set the selected provider API key before running SWE-bench eval.",
+  );
 }
-const deepSeekApiKey = apiKey;
 
 const configPath = path.resolve(
   process.env.SWE_VERIFIED_CONFIG?.trim() ??
@@ -135,9 +136,11 @@ const userRounds = readPositiveIntegerSetting(
   evalConfig.userRounds,
   1,
 );
-const model = process.env.DEEPSEEK_MODEL ??
+const model = process.env.OPENCAT_MODEL ??
+  process.env.ARK_MODEL ??
+  process.env.DEEPSEEK_MODEL ??
   stringSetting(evalConfig.model) ??
-  "deepseek-v4-pro";
+  modelRuntimeConfig.model;
 const allowNetworkClone = readBooleanSetting(
   "SWE_VERIFIED_ALLOW_NETWORK_CLONE",
   evalConfig.allowNetworkClone,
@@ -201,12 +204,9 @@ async function runInstance(instance: SweBenchInstance): Promise<InstanceSummary>
     const runtime = createRuntime({
       cwd: worktreePath,
       sessionId: `session_${hashShort(`${runId}:${instance.instance_id}`)}`,
-      deepSeekRuntimeConfig: {
-        ...loadConfig(),
-        apiKey: deepSeekApiKey,
-        baseUrl: process.env.DEEPSEEK_BASE_URL,
+      modelRuntimeConfig: {
+        ...modelRuntimeConfig,
         model,
-        reasoningEffort: "max",
       },
       MemoryConfig: createMemoryConfig({ cwd: worktreePath }),
       observer: {

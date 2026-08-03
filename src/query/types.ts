@@ -1,10 +1,10 @@
 import type {
-  DeepSeekAssistantMessage,
-  DeepSeekMessage,
-  DeepSeekStreamEnvelope,
-  DeepSeekToolCall,
-  DeepSeekUsage,
-} from "../deepseek/types.js";
+  ModelAssistantMessage,
+  ModelMessage,
+  ModelStreamEnvelope,
+  ModelToolCall,
+  ModelUsage,
+} from "../openai-compatible/types.js";
 import type { Message } from "../types/messages.js";
 import type { RuntimeUsageStats } from "../types/runtime.js";
 
@@ -14,7 +14,7 @@ export type ToolPermissionDecision =
 
 export type ToolPermissionRequest = {
   approvalId: string;
-  toolCall: DeepSeekToolCall;
+  toolCall: ModelToolCall;
   mode: "plan";
   reason: string;
 };
@@ -23,14 +23,14 @@ export type QueryEvent =
   | {
     type: "context_ready";
     systemPrompt: string;
-    messages: DeepSeekMessage[];
+    messages: ModelMessage[];
     stats: MessageProjectionStats;
   }
   | { type: "model_stream_start"; turn: number }
-  | { type: "model_stream_event"; event: DeepSeekStreamEnvelope }
+  | { type: "model_stream_event"; event: ModelStreamEnvelope }
   | {
     type: "model_usage";
-    usage: DeepSeekUsage;
+    usage: ModelUsage;
     sessionUsage: RuntimeUsageStats;
   }
   | {
@@ -43,27 +43,27 @@ export type QueryEvent =
   | { type: "assistant_text_delta"; text: string }
   | {
     type: "assistant_message";
-    message: DeepSeekAssistantMessage;
-    usage?: DeepSeekUsage;
+    message: ModelAssistantMessage;
+    usage?: ModelUsage;
   }
-  | { type: "tool_use"; toolCall: DeepSeekToolCall }
+  | { type: "tool_use"; toolCall: ModelToolCall }
   | {
     type: "tool_permission_request";
     approvalId: string;
-    toolCall: DeepSeekToolCall;
+    toolCall: ModelToolCall;
     mode: "plan";
     reason: string;
   }
   | {
     type: "tool_permission";
-    toolCall: DeepSeekToolCall;
+    toolCall: ModelToolCall;
     behavior: "denied";
     reason: string;
   }
   | {
     type: "tool_result";
-    toolCall: DeepSeekToolCall;
-    message: DeepSeekMessage;
+    toolCall: ModelToolCall;
+    message: ModelMessage;
     succeeded: boolean;
   }
   | { type: "turn_end"; turn: number; hasToolUse: boolean }
@@ -92,7 +92,7 @@ export interface QueryOptions {
 
 export interface MessagesForQuery {
   systemPrompt: string;
-  messages: DeepSeekMessage[];
+  messages: ModelMessage[];
   forkContextMessages: Message[];
   stats: MessageProjectionStats;
 }

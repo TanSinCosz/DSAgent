@@ -1,21 +1,17 @@
 import { runMemoryDream } from "../src/Memory/auto-dream.js";
+import { loadConfig } from "../src/config/load-config.js";
 import { createRuntime } from "../src/types/runtime.js";
 import { createState } from "../src/types/state.js";
 
-const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
+const modelRuntimeConfig = loadConfig();
 
-if (!apiKey) {
-  throw new Error("Missing DEEPSEEK_API_KEY environment variable.");
+if (!modelRuntimeConfig.apiKey.trim()) {
+  throw new Error("Missing API key for the selected model provider.");
 }
 
 const runtime = createRuntime({
   cwd: process.cwd(),
-  deepSeekRuntimeConfig: {
-    apiKey,
-    baseUrl: process.env.DEEPSEEK_BASE_URL,
-    model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro",
-    maxTokens: Number(process.env.DEEPSEEK_MAX_TOKENS ?? 8192),
-  },
+  modelRuntimeConfig,
   MemoryConfig: {
     embedder: {
       provider: "manual-memory-dream",

@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { loadConfig } from "./config/load-config.js";
 import { createMemoryConfig } from "./Memory/config.js";
 import { closeMcpConnections } from "./mcp/index.js";
-import { formatErrorForUser } from "./deepseek/errors.js";
+import { formatOpenAICompatibleErrorForUser } from "./openai-compatible/errors.js";
 import { createToolsWithConfiguredMcp } from "./mcp/config.js";
 import { query } from "./query.js";
 import { drainPendingLongTermMemoryExtractions } from "./query/long-term-memory.js";
@@ -19,7 +19,7 @@ export async function runCli(args: string[]): Promise<void> {
   const { tools, mcpConnections } = await createToolsWithConfiguredMcp(process.cwd());
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: loadConfig(),
+    modelRuntimeConfig: loadConfig(),
     MemoryConfig: createMemoryConfig({ cwd: process.cwd() }),
     longTermMemoryConfig: {
       autoInject: true,
@@ -32,7 +32,7 @@ export async function runCli(args: string[]): Promise<void> {
   const firstPrompt = args.join(" ").trim();
 
   console.log(`Session: ${runtime.sessionId}`);
-  console.log(`Model: ${runtime.deepSeekRuntimeConfig.model ?? "default"}`);
+  console.log(`Model: ${runtime.modelRuntimeConfig.model ?? "default"}`);
   console.log(`Tools: ${runtime.tools.map((tool) => tool.name).join(", ")}`);
   console.log("Type /exit to quit.");
 
@@ -126,5 +126,5 @@ async function runUserPrompt(
 }
 
 function stringifyError(error: unknown): string {
-  return formatErrorForUser(error);
+  return formatOpenAICompatibleErrorForUser(error);
 }

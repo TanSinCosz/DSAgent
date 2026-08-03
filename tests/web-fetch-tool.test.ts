@@ -34,7 +34,7 @@ test("WebFetch fetches HTML and extracts readable text", async () => {
   });
   const state = createState();
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-pro",
       maxTokens: 4_096,
@@ -76,7 +76,7 @@ test("WebFetch reports cross-host redirects without following them", async () =>
   });
   const state = createState();
   const runtime = createRuntime({
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-pro",
       maxTokens: 4_096,

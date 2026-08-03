@@ -1,6 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, normalize, resolve } from "node:path";
-import type { DeepSeekMessage } from "../deepseek/types.js";
+import { getModelUserContentText } from "../openai-compatible/content.js";
+import type { ModelMessage } from "../openai-compatible/types.js";
 import {
   formatFileMemoryManifest,
   getFileMemoryDailyLogPath,
@@ -69,7 +70,7 @@ export async function createLongTermMemoryContextMessage(
   runtime: Runtime,
   messages: readonly Message[],
   memoryState?: LongTermMemoryState,
-): Promise<DeepSeekMessage | null> {
+): Promise<ModelMessage | null> {
   const config = runtime.longTermMemoryConfig;
   if (!config.enabled || !config.autoInject) {
     return null;
@@ -159,9 +160,9 @@ async function selectRelevantFileMemories(
     : "";
 
   try {
-    const response = await runtime.deepSeekClient.create({
-      model: getDeepSeekModel(runtime),
-      user_id: runtime.deepSeekRuntimeConfig.userId,
+    const response = await runtime.modelClient.create({
+      model: getMemorySelectorModel(runtime),
+      user_id: runtime.modelRuntimeConfig.userId,
       max_tokens: MEMORY_SELECTOR_MAX_TOKENS,
       temperature: 0,
       thinking: { type: "disabled" },
@@ -278,8 +279,12 @@ function extractJsonObject(content: string): string {
   return start >= 0 && end >= start ? content.slice(start, end + 1) : content;
 }
 
-function getDeepSeekModel(runtime: Runtime): "deepseek-v4-flash" | "deepseek-v4-pro" {
-  return runtime.deepSeekRuntimeConfig.model === "deepseek-v4-flash"
+function getMemorySelectorModel(runtime: Runtime): string {
+  if (runtime.modelRuntimeConfig.provider !== "deepseek") {
+    return runtime.modelRuntimeConfig.model;
+  }
+
+  return runtime.modelRuntimeConfig.model === "deepseek-v4-flash"
     ? "deepseek-v4-flash"
     : "deepseek-v4-pro";
 }
@@ -836,7 +841,10 @@ function buildLongTermMemoryQuery(messages: readonly Message[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message?.role === "user" && message.source === "user") {
-      return truncate(message.content, MEMORY_QUERY_MAX_CHARS).trim();
+      return truncate(
+        getModelUserContentText(message.content),
+        MEMORY_QUERY_MAX_CHARS,
+      ).trim();
     }
   }
 

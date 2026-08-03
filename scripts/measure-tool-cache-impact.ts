@@ -135,7 +135,7 @@ async function snapshot(
   });
   const runtime = createRuntime({
     cwd: process.cwd(),
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 256,

@@ -17,7 +17,7 @@ function createTestRuntime(cwd: string) {
   return createRuntime({
     sessionId: "session_post_compact_context",
     cwd,
-    deepSeekRuntimeConfig: {
+    modelRuntimeConfig: {
       apiKey: "test-key",
       model: "deepseek-v4-flash",
       maxTokens: 128,
