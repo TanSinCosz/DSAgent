@@ -1,5 +1,7 @@
 # OpenCat
 
+![OpenCat project preview](./项目展示.png)
+
 一个基于 **DeepSeek** 的编码 AI 智能体（Coding Agent），TypeScript 编写，Node.js 运行时。它能接收自然语言编程任务，自主调用工具（读写文件、执行 Shell、搜索代码、启动子智能体等），在工具结果与 LLM 推理之间循环迭代，直到任务完成。
 
 ---
